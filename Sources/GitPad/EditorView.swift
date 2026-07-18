@@ -31,20 +31,21 @@ struct EditorView: View {
             }
             .animation(.spring(response: 0.32, dampingFraction: 0.85), value: store.screen)
         }
+        .overlay( // hairline edge; material below dims itself when the window loses key
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
         .frame(minWidth: 280, minHeight: 180)
     }
 }
 
-/// Liquid glass on macOS 26+, vibrancy fallback below.
+/// Refined translucent material; automatically softens when the window is inactive.
 struct GlassBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
-        if #available(macOS 26.0, *) {
-            return NSGlassEffectView()
-        }
         let v = NSVisualEffectView()
         v.material = .popover
         v.blendingMode = .behindWindow
-        v.state = .active
+        v.state = .followsWindowActiveState
         return v
     }
     func updateNSView(_ v: NSView, context: Context) {}
@@ -99,41 +100,62 @@ struct SettingsView: View {
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
 
+    // (tag, label) — system designs plus Apple-bundled note-friendly fonts.
+    // Nothing here ships with the app, so open-sourcing stays clean.
+    static let fonts: [(String, String)] = [
+        ("system", "SF Pro (System)"),
+        ("serif", "New York (Serif)"),
+        ("rounded", "SF Rounded"),
+        ("mono", "SF Mono"),
+        ("Avenir Next", "Avenir Next"),
+        ("Helvetica Neue", "Helvetica Neue"),
+        ("Charter", "Charter"),
+        ("Georgia", "Georgia"),
+        ("Palatino", "Palatino"),
+        ("Iowan Old Style", "Iowan Old Style"),
+    ]
+
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Settings").font(.title3.weight(.semibold)).padding(.top, 18)
-            Form {
-                Picker("Font", selection: $fontDesign) {
-                    Text("System").tag("system")
-                    Text("Serif").tag("serif")
-                    Text("Rounded").tag("rounded")
-                    Text("Mono").tag("mono")
+        VStack(spacing: 0) {
+            HStack {
+                Text("Settings").font(.headline)
+                Spacer()
+                Button { store.screen = .capture } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
-                HStack {
-                    Slider(value: $editorFontSize, in: 11...20, step: 1) { Text("Size") }
-                    Text("\(Int(editorFontSize)) pt").font(.caption).foregroundStyle(.secondary)
-                        .frame(width: 36, alignment: .trailing)
+                .buttonStyle(.borderless)
+            }
+            .padding(12)
+
+            Form {
+                Section("Editor") {
+                    Picker("Font", selection: $fontDesign) {
+                        ForEach(Self.fonts, id: \.0) { tag, label in
+                            Text(label).tag(tag)
+                        }
+                    }
+                    HStack {
+                        Slider(value: $editorFontSize, in: 11...20, step: 1) { Text("Size") }
+                        Text("\(Int(editorFontSize)) pt")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                    Text("The quick brown fox jumps over the lazy dog.")
+                        .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
+                        .foregroundStyle(.secondary)
+                }
+                Section("Appearance") {
+                    Picker("Theme", selection: .constant("system")) {
+                        Text("System").tag("system")
+                    }
+                    .disabled(true)
+                    Text("More themes are on the roadmap.")
+                        .font(.caption).foregroundStyle(.tertiary)
                 }
             }
-            .frame(maxWidth: 320)
-            Text("Aa — The quick brown fox")
-                .font(previewFont)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Done") { store.screen = .capture }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .padding(.bottom, 20)
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
         }
-        .padding(.horizontal)
-    }
-
-    private var previewFont: Font {
-        let d: Font.Design = fontDesign == "serif" ? .serif
-            : fontDesign == "rounded" ? .rounded
-            : fontDesign == "mono" ? .monospaced : .default
-        return .system(size: CGFloat(editorFontSize), design: d)
     }
 }
 
@@ -306,6 +328,9 @@ struct MarkdownTextView: NSViewRepresentable {
         tv.isVerticallyResizable = true
         tv.autoresizingMask = [.width]
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.isAutomaticDashSubstitutionEnabled = false // keep "---" as typed → divider
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
         tv.delegate = context.coordinator
         storage.delegate = context.coordinator
         context.coordinator.textView = tv
@@ -350,11 +375,16 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // MARK: fonts
         static func baseFont(_ size: CGFloat, _ design: String) -> NSFont {
-            let d: NSFontDescriptor.SystemDesign = design == "serif" ? .serif
-                : design == "rounded" ? .rounded
-                : design == "mono" ? .monospaced : .default
-            let desc = NSFont.systemFont(ofSize: size).fontDescriptor.withDesign(d)
-            return desc.flatMap { NSFont(descriptor: $0, size: size) } ?? .systemFont(ofSize: size)
+            switch design {
+            case "system", "serif", "rounded", "mono":
+                let d: NSFontDescriptor.SystemDesign = design == "serif" ? .serif
+                    : design == "rounded" ? .rounded
+                    : design == "mono" ? .monospaced : .default
+                let desc = NSFont.systemFont(ofSize: size).fontDescriptor.withDesign(d)
+                return desc.flatMap { NSFont(descriptor: $0, size: size) } ?? .systemFont(ofSize: size)
+            default: // a named system-installed font (Avenir Next, Charter, …)
+                return NSFont(name: design, size: size) ?? .systemFont(ofSize: size)
+            }
         }
 
         private static func bold(_ f: NSFont) -> NSFont {
@@ -395,9 +425,9 @@ struct MarkdownTextView: NSViewRepresentable {
             let base: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.labelColor]
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
                 (re(#"^#{1,3} .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 4, design))]),
-                // fade the hash marks so headers read as rendered titles
-                (re(#"^#{1,3}(?= )"#), [.foregroundColor: NSColor.tertiaryLabelColor,
-                                        .font: NSFont.systemFont(ofSize: fontSize - 3, weight: .light)]),
+                // hide the hash marks entirely so headers read as rendered titles
+                (re(#"^#{1,3} (?=\S)"#), [.foregroundColor: NSColor.clear,
+                                          .font: NSFont.systemFont(ofSize: 0.1)]),
                 (re(#"\*\*[^*\n]+\*\*"#), [.font: Self.bold(f)]),
                 (re(#"(?<!\*)\*[^*\n]+\*(?!\*)"#), [.obliqueness: 0.15]),
                 (re(#"~~[^~\n]+~~"#), [.strikethroughStyle: NSUnderlineStyle.single.rawValue]),
@@ -409,7 +439,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 (re(#"^\s*☑ .*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
                                      .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
                 // dashes hidden; DividerLayoutManager draws a full-width rule instead
-                (re(#"^-{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
+                (re(#"^\s*[-—]{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
             ]
             cachedRules = (fontSize, design, base, list)
             return (base, list)

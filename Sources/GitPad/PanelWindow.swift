@@ -8,10 +8,8 @@ final class PanelWindow: NSPanel {
         self.store = store
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 560),
-            styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel, .resizable],
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered, defer: false)
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -19,16 +17,15 @@ final class PanelWindow: NSPanel {
         hidesOnDeactivate = false
         backgroundColor = .clear
         isOpaque = false
-        [.closeButton, .miniaturizeButton, .zoomButton].forEach {
-            standardWindowButton($0)?.isHidden = true
-        }
+        hasShadow = true
         let host = NSHostingView(rootView: EditorView(store: store))
         host.wantsLayer = true
         host.layer?.cornerRadius = 14
         host.layer?.cornerCurve = .continuous
         host.layer?.masksToBounds = true
         contentView = host
-        center()
+        setFrameAutosaveName("GitPad.panel")
+        if frame.width < 300 { center() } // first launch, no saved frame
     }
 
     override var canBecomeKey: Bool { true }

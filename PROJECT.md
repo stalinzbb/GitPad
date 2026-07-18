@@ -58,6 +58,8 @@ Swift + SwiftUI/AppKit, built with SwiftPM (no Xcode project). Zero third-party 
 - Ad-hoc signing only — fine locally, would need Developer ID for distribution.
 
 ## Roadmap (add when needed — YAGNI until then)
+- Theming: multiple color themes (VS Code-style, forkable) — Settings already stubs the picker
+- Date picker on date tokens in notes (deferred; unclear value)
 - Search across notes
 - Configurable hotkey + notes folder location
 - Rendered markdown preview
