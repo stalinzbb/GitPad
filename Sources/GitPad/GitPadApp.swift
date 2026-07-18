@@ -13,7 +13,8 @@ func registerHotkey(_ handler: @escaping () -> Void) {
     }, 1, &eventType, nil, nil)
     var ref: EventHotKeyRef?
     let id = EventHotKeyID(signature: OSType(0x47504144), id: 1) // "GPAD"
-    RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), id, GetApplicationEventTarget(), 0, &ref)
+    let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), id, GetApplicationEventTarget(), 0, &ref)
+    NSLog("GitPad: hotkey register status=%d", status)
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -45,9 +46,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
         backgroundSync()
+
+        // show the panel on first launch so opening the app isn't a no-op
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // double-clicking the app (or `open`) while running shows the panel
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        return false
     }
 
     @objc func togglePanel() {
+        NSLog("GitPad: togglePanel, wasKey=%d", panel.isKeyWindow ? 1 : 0)
         if panel.isKeyWindow {
             panel.orderOut(nil)
         } else {
