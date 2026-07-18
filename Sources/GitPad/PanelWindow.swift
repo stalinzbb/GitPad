@@ -41,6 +41,7 @@ final class PanelWindow: NSPanel {
 
     /// Collapse to a 240×40 lozenge (saving the expanded frame) or restore it.
     func applyPill(_ pill: Bool) {
+        isMovableByWindowBackground = !pill // pill drags via its own gesture (tap = expand)
         if pill {
             expandedFrame = frame
             let f = NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40)

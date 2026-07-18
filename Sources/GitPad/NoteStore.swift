@@ -50,6 +50,8 @@ final class NoteStore: ObservableObject {
     var onHide: (() -> Void)?
     var requestSync: (() -> Void)?
     var setPill: ((Bool) -> Void)?
+    var pillDrag: (() -> Void)?      // fires on each drag tick; AppDelegate reads the mouse
+    var pillDragEnded: (() -> Void)?
     var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
     private var loading = false
@@ -99,6 +101,39 @@ final class NoteStore: ObservableObject {
         refresh()
     }
 
+    func renameFolder(_ name: String, to newName: String) {
+        let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "-")
+        guard !clean.isEmpty, clean != name else { return }
+        let fm = FileManager.default
+        let dst = dir.appendingPathComponent(clean)
+        guard !fm.fileExists(atPath: dst.path) else { return }
+        let sel = selected
+        try? fm.moveItem(at: dir.appendingPathComponent(name), to: dst)
+        titleCache.removeAll()
+        refresh()
+        if let s = sel, s.deletingLastPathComponent().lastPathComponent == name {
+            selected = dst.appendingPathComponent(s.lastPathComponent)
+        }
+    }
+
+    /// Non-destructive: move the folder's notes to the root Inbox, then remove it.
+    func deleteFolder(_ name: String) {
+        let fm = FileManager.default
+        let folder = dir.appendingPathComponent(name)
+        for item in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            where item.pathExtension == "md" {
+            var dest = dir.appendingPathComponent(item.lastPathComponent)
+            if fm.fileExists(atPath: dest.path) {
+                dest = dir.appendingPathComponent(name + "-" + item.lastPathComponent)
+            }
+            try? fm.moveItem(at: item, to: dest)
+        }
+        try? fm.removeItem(at: folder)
+        titleCache.removeAll()
+        refresh()
+    }
+
     func move(_ url: URL, to folder: String?) {
         let dest = (folder.map { dir.appendingPathComponent($0) } ?? dir)
             .appendingPathComponent(url.lastPathComponent)
@@ -121,9 +156,8 @@ final class NoteStore: ObservableObject {
         let url = daily.appendingPathComponent(name.string(from: Date()) + ".md")
         if !FileManager.default.fileExists(atPath: url.path) {
             let header = DateFormatter()
-            header.dateFormat = "d MMMM"
-            let prefix = UserDefaults.standard.string(forKey: "dailyPrefix") ?? "Daily Notes"
-            try? "# \(prefix): \(header.string(from: Date()))\n\n"
+            header.dateFormat = "EEEE, d MMMM" // fixed, date-based title
+            try? "# \(header.string(from: Date()))\n\n"
                 .write(to: url, atomically: true, encoding: .utf8)
             refresh()
         }

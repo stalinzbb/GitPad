@@ -82,6 +82,10 @@ struct EditorView: View {
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .frame(minWidth: store.pill ? 0 : 280, minHeight: store.pill ? 0 : 180)
+        .background( // ⌘M minimizes to pill from any screen
+            Button("") { if !store.pill { store.setPill?(true) } }
+                .keyboardShortcut("m").opacity(0)
+        )
         .onAppear { store.applyAppearance?(theme.appearance) }
         .onChange(of: themeID) { _ in store.applyAppearance?(theme.appearance) }
     }
@@ -134,6 +138,14 @@ struct NavBar<L: View, C: View, R: View>: View {
     }
 }
 
+/// Uniformly sized nav-bar glyph so mixed SF Symbols line up and space evenly.
+func navIcon(_ name: String) -> some View {
+    Image(systemName: name)
+        .font(.system(size: 13))
+        .frame(width: 24, height: 22)
+        .contentShape(Rectangle())
+}
+
 /// Standard header: a screen-specific left slot + the persistent right cluster
 /// (Settings · Minimize · Close) available on every screen.
 struct ChromeBar<L: View>: View {
@@ -141,24 +153,23 @@ struct ChromeBar<L: View>: View {
     let title: String
     var subtitle: String? = nil
     var showSettings: Bool = true
+    var showSyncDot: Bool = true
     @ViewBuilder var left: () -> L
 
     var body: some View {
         NavBar {
             left()
         } center: {
-            NavCenter(store: store, title: title, subtitle: subtitle)
+            NavCenter(store: store, title: title, subtitle: subtitle, showSyncDot: showSyncDot)
         } right: {
-            HStack(spacing: 10) {
+            HStack(spacing: 4) {
                 if showSettings {
-                    Button { store.openSettings() } label: { Image(systemName: "gearshape") }
+                    Button { store.openSettings() } label: { navIcon("gearshape") }
                         .help("Settings (⌘,)")
                 }
-                Button { store.setPill?(true) } label: {
-                    Image(systemName: "arrow.down.right.and.arrow.up.left")
-                }
-                .help("Minimize to pill")
-                Button { store.onHide?() } label: { Image(systemName: "xmark") }
+                Button { store.setPill?(true) } label: { navIcon("arrow.down.right.and.arrow.up.left") }
+                    .help("Minimize to pill (⌘M)")
+                Button { store.onHide?() } label: { navIcon("xmark") }
                     .help("Close (Esc)")
             }
         }
@@ -170,14 +181,19 @@ struct NavCenter: View {
     @ObservedObject var store: NoteStore
     let title: String
     var subtitle: String? = nil
+    var showSyncDot: Bool = true
 
     var body: some View {
         VStack(spacing: 1) {
             Text(title).font(.footnote.weight(.medium)).lineLimit(1)
-            HStack(spacing: 4) {
-                Circle().fill(syncColor(store.syncStatus)).frame(width: 5, height: 5)
-                if let subtitle {
-                    Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            if showSyncDot || subtitle != nil {
+                HStack(spacing: 4) {
+                    if showSyncDot {
+                        Circle().fill(syncColor(store.syncStatus)).frame(width: 5, height: 5)
+                    }
+                    if let subtitle {
+                        Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                    }
                 }
             }
         }
@@ -186,8 +202,8 @@ struct NavCenter: View {
     }
 }
 
-/// Collapsed UI: a draggable lozenge. Drag the body to move it (the window is
-/// movable-by-background); click the expand button — or press ⌥Space — to restore.
+/// Collapsed UI: a lozenge. Tap it to expand (or ⌥Space); drag it to move.
+/// One DragGesture serves both — a near-zero move on release is treated as a tap.
 struct PillView: View {
     @ObservedObject var store: NoteStore
 
@@ -197,17 +213,23 @@ struct PillView: View {
             Text(store.selected.map { store.title(for: $0) } ?? "GitPad")
                 .font(.footnote.weight(.medium)).lineLimit(1)
             Spacer(minLength: 0)
-            // A real Button reliably receives the click even with
-            // isMovableByWindowBackground on (an onTapGesture gets eaten by the drag).
-            Button { store.setPill?(false) } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help("Expand (⌥Space)")
+            Image(systemName: "arrow.up.left.and.arrow.down.right") // affordance hint
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in store.pillDrag?() }
+                .onEnded { g in
+                    store.pillDragEnded?()
+                    if abs(g.translation.width) + abs(g.translation.height) < 4 {
+                        store.setPill?(false) // tap → expand
+                    }
+                }
+        )
+        .help("Tap to expand (⌥Space)")
     }
 }
 
@@ -237,11 +259,11 @@ struct CaptureView: View {
             ChromeBar(store: store,
                       title: store.selected.map { store.title(for: $0) } ?? "",
                       subtitle: store.selected.map { subtitle(for: $0) }) {
-                HStack(spacing: 10) {
-                    Button { store.screen = .library } label: { Image(systemName: "square.grid.2x2") }
+                HStack(spacing: 4) {
+                    Button { store.screen = .library } label: { navIcon("square.grid.2x2") }
                         .help("Library (⌘L)")
                         .keyboardShortcut("l")
-                    Button { store.newNote() } label: { Image(systemName: "square.and.pencil") }
+                    Button { store.newNote() } label: { navIcon("square.and.pencil") }
                         .help("New note (⌘N)")
                         .keyboardShortcut("n")
                 }
@@ -276,7 +298,6 @@ struct SettingsView: View {
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
-    @AppStorage("dailyPrefix") private var dailyPrefix = "Daily Notes"
     @State private var remote = ""
     @State private var aheadBehind: (ahead: Int, behind: Int)?
 
@@ -297,8 +318,8 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ChromeBar(store: store, title: "Settings", showSettings: false) {
-                Button { store.goBack() } label: { Image(systemName: "chevron.left") }
+            ChromeBar(store: store, title: "Settings", showSettings: false, showSyncDot: false) {
+                Button { store.goBack() } label: { navIcon("chevron.left") }
                     .help("Back (Esc)")
             }
 
@@ -318,9 +339,6 @@ struct SettingsView: View {
                     Text("The quick brown fox jumps over the lazy dog.")
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
-                    TextField("Daily note prefix", text: $dailyPrefix, prompt: Text("Daily Notes"))
-                    Text("Today's note is titled \"\(dailyPrefix.isEmpty ? "Daily Notes" : dailyPrefix): \(Date().formatted(.dateTime.day().month(.wide)))\".")
-                        .font(.caption).foregroundStyle(.tertiary)
                 }
                 Section("Sync") {
                     Button {
@@ -417,19 +435,21 @@ struct SettingsView: View {
 // MARK: - Library (two-column: sources on the left, notes on the right)
 
 enum LibrarySource: Hashable {
-    case daily, recent, folder(String)
+    case recent, daily, inbox, folder(String)
 
     var label: String {
         switch self {
-        case .daily: return "Daily"
         case .recent: return "Recent"
+        case .daily: return "Daily"
+        case .inbox: return "Inbox"
         case .folder(let f): return f
         }
     }
     var symbol: String {
         switch self {
-        case .daily: return "calendar"
         case .recent: return "clock"
+        case .daily: return "calendar"
+        case .inbox: return "tray"
         case .folder: return "folder"
         }
     }
@@ -441,6 +461,9 @@ struct LibraryView: View {
     @State private var source: LibrarySource = .recent
     @State private var creatingFolder = false
     @State private var newFolderName = ""
+    @State private var renaming: String?
+    @State private var renameText = ""
+    @State private var deleting: String?
     @FocusState private var searchFocused: Bool
     @FocusState private var folderFieldFocused: Bool
 
@@ -450,8 +473,9 @@ struct LibraryView: View {
     private var notes: [URL] {
         store.matches(query).filter { url in
             switch source {
-            case .daily: return store.folder(of: url) == "Daily"
             case .recent: return true
+            case .daily: return store.folder(of: url) == "Daily"
+            case .inbox: return store.folder(of: url) == nil
             case .folder(let f): return store.folder(of: url) == f
             }
         }
@@ -471,7 +495,7 @@ struct LibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             ChromeBar(store: store, title: "Library") {
-                Button { store.screen = .capture } label: { Image(systemName: "chevron.left") }
+                Button { store.screen = .capture } label: { navIcon("chevron.left") }
                     .help("Back to note (⌘L / Esc)")
                     .keyboardShortcut("l")
             }
@@ -490,8 +514,9 @@ struct LibraryView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    sourceRow(.daily)
                     sourceRow(.recent)
+                    sourceRow(.daily)
+                    sourceRow(.inbox)
                     if !folders.isEmpty {
                         Text("Folders")
                             .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
@@ -530,10 +555,36 @@ struct LibraryView: View {
             }
         }
         .frame(width: 150)
+        .alert("Rename folder", isPresented: Binding(
+            get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $renameText)
+            Button("Rename") {
+                if let f = renaming {
+                    let new = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    store.renameFolder(f, to: new)
+                    if source == .folder(f), !new.isEmpty { source = .folder(new) }
+                }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        }
+        .alert("Delete “\(deleting ?? "")”?", isPresented: Binding(
+            get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let f = deleting {
+                    store.deleteFolder(f)
+                    if source == .folder(f) { source = .recent }
+                }
+                deleting = nil
+            }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        } message: {
+            Text("Notes inside move to Inbox; the folder is removed.")
+        }
     }
 
-    private func sourceRow(_ s: LibrarySource) -> some View {
-        Button { source = s } label: {
+    @ViewBuilder private func sourceRow(_ s: LibrarySource) -> some View {
+        let row = Button { source = s } label: {
             Label(s.label, systemImage: s.symbol)
                 .font(.callout).lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -543,6 +594,15 @@ struct LibraryView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+
+        if case .folder(let f) = s {
+            row.contextMenu {
+                Button("Rename…") { renameText = f; renaming = f }
+                Button("Delete Folder", role: .destructive) { deleting = f }
+            }
+        } else {
+            row
+        }
     }
 
     // MARK: right column
@@ -633,6 +693,7 @@ struct NoteRow: View {
 // MARK: - Smart markdown editor
 
 private let dividerKey = NSAttributedString.Key("gitpadDivider")
+private let checkboxKey = NSAttributedString.Key("gitpadCheckbox") // value: Bool (checked)
 
 struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
@@ -774,10 +835,12 @@ struct MarkdownTextView: NSViewRepresentable {
                 (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular),
                                      .foregroundColor: theme.code]),
                 (re(#"^\s*(?:[-*+] |\d+\. )"#), [.foregroundColor: NSColor.secondaryLabelColor]),
-                (re(#"^\s*[☐☑]"#), [.foregroundColor: theme.accent,
-                                    .font: NSFont.systemFont(ofSize: fontSize + 1)]),
-                (re(#"^\s*☑ .*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
-                                     .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
+                // strike/dim only the text after a checked box (fixed 2-char lookbehind)
+                (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
+                                      .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
+                // hide the raw glyph; DividerLayoutManager draws a real checkbox at its rect
+                (re(#"☐"#), [.foregroundColor: NSColor.clear, checkboxKey: false]),
+                (re(#"☑"#), [.foregroundColor: NSColor.clear, checkboxKey: true]),
                 // dashes hidden; DividerLayoutManager draws a full-width rule instead
                 (re(#"^\s*[-—]{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
             ]
@@ -787,6 +850,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         func highlight(_ storage: NSTextStorage, range: NSRange) {
             guard range.location + range.length <= storage.length else { return }
+            (storage.layoutManagers.first as? DividerLayoutManager)?.accent = Theme.named(themeID).accent
             let (base, list) = rules()
             storage.beginEditing()
             storage.setAttributes(base, range: range)
@@ -945,12 +1009,16 @@ struct ActionBar: View {
     }
 }
 
-/// Draws a full-width rule for `---` lines (their text is set to clear).
+/// Draws a full-width rule for `---` lines and a real checkbox for ☐/☑
+/// (their text is set to clear; the character stays in the model for editing).
 final class DividerLayoutManager: NSLayoutManager {
+    var accent: NSColor = .controlAccentColor
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first else { return }
         let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+
         storage.enumerateAttribute(dividerKey, in: charRange) { value, range, _ in
             guard value != nil else { return }
             let gr = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
@@ -962,6 +1030,33 @@ final class DividerLayoutManager: NSLayoutManager {
             path.lineWidth = 1
             NSColor.separatorColor.setStroke()
             path.stroke()
+        }
+
+        storage.enumerateAttribute(checkboxKey, in: charRange) { value, range, _ in
+            guard let checked = value as? Bool else { return }
+            let gr = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var rect = boundingRect(forGlyphRange: gr, in: container)
+            rect.origin.x += origin.x; rect.origin.y += origin.y
+            drawCheckbox(in: rect, checked: checked)
+        }
+    }
+
+    private func drawCheckbox(in glyphRect: NSRect, checked: Bool) {
+        let side = min(glyphRect.width, glyphRect.height) * 0.82
+        let box = NSRect(x: glyphRect.minX, y: glyphRect.midY - side / 2, width: side, height: side)
+        let path = NSBezierPath(roundedRect: box, xRadius: side * 0.28, yRadius: side * 0.28)
+        if checked {
+            accent.setFill(); path.fill()
+            let c = NSBezierPath()
+            c.move(to: NSPoint(x: box.minX + side * 0.24, y: box.minY + side * 0.52))
+            c.line(to: NSPoint(x: box.minX + side * 0.42, y: box.minY + side * 0.32))
+            c.line(to: NSPoint(x: box.minX + side * 0.76, y: box.minY + side * 0.70))
+            c.lineWidth = max(1.4, side * 0.12)
+            c.lineCapStyle = .round; c.lineJoinStyle = .round
+            NSColor.white.setStroke(); c.stroke()
+        } else {
+            NSColor.tertiaryLabelColor.setStroke()
+            path.lineWidth = 1.3; path.stroke()
         }
     }
 }

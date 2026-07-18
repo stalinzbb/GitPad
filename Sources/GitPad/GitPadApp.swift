@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: PanelWindow!
     var statusItem: NSStatusItem!
     var syncTimer: Timer?
+    private var pillDragOrigin: NSRect?
+    private var pillDragMouse: NSPoint?
     private let syncQueue = DispatchQueue(label: "gitpad.sync")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -64,6 +66,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.store.pill = on
             self?.panel.applyPill(on)
         }
+        store.pillDrag = { [weak self] in
+            guard let self else { return }
+            let mouse = NSEvent.mouseLocation
+            if self.pillDragOrigin == nil { self.pillDragOrigin = self.panel.frame; self.pillDragMouse = mouse }
+            let o = self.pillDragOrigin!, m = self.pillDragMouse!
+            self.panel.setFrameOrigin(NSPoint(x: o.origin.x + (mouse.x - m.x),
+                                              y: o.origin.y + (mouse.y - m.y)))
+        }
+        store.pillDragEnded = { [weak self] in self?.pillDragOrigin = nil; self?.pillDragMouse = nil }
         store.applyAppearance = { [weak self] name in
             self?.panel.appearance = name.flatMap { NSAppearance(named: $0) }
         }
