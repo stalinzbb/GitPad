@@ -101,8 +101,10 @@ final class NoteStore: ObservableObject {
         let url = daily.appendingPathComponent(name.string(from: Date()) + ".md")
         if !FileManager.default.fileExists(atPath: url.path) {
             let header = DateFormatter()
-            header.dateFormat = "EEE, MMM d"
-            try? "# \(header.string(from: Date()))\n\n".write(to: url, atomically: true, encoding: .utf8)
+            header.dateFormat = "d MMMM"
+            let prefix = UserDefaults.standard.string(forKey: "dailyPrefix") ?? "Daily Notes"
+            try? "# \(prefix): \(header.string(from: Date()))\n\n"
+                .write(to: url, atomically: true, encoding: .utf8)
             refresh()
         }
         return url
@@ -121,7 +123,7 @@ final class NoteStore: ObservableObject {
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         let url = dir.appendingPathComponent("note-\(stamp).md")
-        try? "".write(to: url, atomically: true, encoding: .utf8)
+        try? "# ".write(to: url, atomically: true, encoding: .utf8) // start typing the title
         refresh()
         selected = url
         screen = .capture

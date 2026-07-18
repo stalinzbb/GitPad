@@ -163,6 +163,7 @@ struct SettingsView: View {
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
+    @AppStorage("dailyPrefix") private var dailyPrefix = "Daily Notes"
     @State private var remote = ""
     @State private var aheadBehind: (ahead: Int, behind: Int)?
 
@@ -211,6 +212,9 @@ struct SettingsView: View {
                     Text("The quick brown fox jumps over the lazy dog.")
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
+                    TextField("Daily note prefix", text: $dailyPrefix, prompt: Text("Daily Notes"))
+                    Text("Today's note is titled \"\(dailyPrefix.isEmpty ? "Daily Notes" : dailyPrefix): \(Date().formatted(.dateTime.day().month(.wide)))\".")
+                        .font(.caption).foregroundStyle(.tertiary)
                 }
                 Section("Sync") {
                     Button {
@@ -343,8 +347,31 @@ struct LibraryView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    chip("All", nil)
-                    ForEach(store.folders, id: \.self) { chip($0, $0) }
+                    // chips don't scale past a handful — switch to a picker, no user setting
+                    if store.folders.count > 5 {
+                        Menu {
+                            Button("All") { folder = nil }
+                            Divider()
+                            ForEach(store.folders, id: \.self) { f in
+                                Button(f) { folder = f }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "folder")
+                                Text(folder ?? "All")
+                                Image(systemName: "chevron.down").font(.caption2)
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.1), in: Capsule())
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                    } else {
+                        chip("All", nil)
+                        ForEach(store.folders, id: \.self) { chip($0, $0) }
+                    }
                     if creatingFolder {
                         TextField("Name", text: $newFolderName)
                             .textFieldStyle(.plain)
@@ -504,6 +531,7 @@ struct MarkdownTextView: NSViewRepresentable {
         }
         if tv.string != text {
             tv.string = text
+            if text == "# " { tv.setSelectedRange(NSRange(location: 2, length: 0)) } // fresh note: caret after title marker
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
     }
@@ -579,7 +607,10 @@ struct MarkdownTextView: NSViewRepresentable {
             let f = Self.baseFont(fontSize, design)
             let base: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.labelColor]
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
-                (re(#"^#{1,3} .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 4, design))]),
+                // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
+                (re(#"^# .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 8, design))]),
+                (re(#"^## .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 4, design))]),
+                (re(#"^### .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 2, design))]),
                 // hide the hash marks entirely so headers read as rendered titles
                 (re(#"^#{1,3} (?=\S)"#), [.foregroundColor: NSColor.clear,
                                           .font: NSFont.systemFont(ofSize: 0.1)]),
