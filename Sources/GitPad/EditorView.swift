@@ -3,47 +3,64 @@ import AppKit
 import Carbon.HIToolbox // kVK_Escape for the hotkey recorder
 
 // MARK: - Themes (token set consumed by the editor + chrome)
+//
+// Curated presets, not a base×color matrix (see GROWTH-style decision: real palettes
+// like Nord/Dracula are defined for ONE mode; the matrix would invent ugly combos and
+// double the tokens). Adding a theme is one row below — appearance/swatch/SwiftUI color
+// all derive from `base` + hex, so you only pick the 3 colors that actually differ.
+
+enum ThemeBase {
+    case system, light, dark
+    var appearance: NSAppearance.Name? {
+        switch self { case .system: return nil; case .light: return .aqua; case .dark: return .darkAqua }
+    }
+}
 
 struct Theme: Identifiable {
     let id: String
     let appearance: NSAppearance.Name?  // nil = follow system; drives every native control
-    let accentSwift: Color              // tint for SwiftUI controls
-    let accent: NSColor                 // checkboxes, chips
+    let accent: NSColor                 // checkboxes, chips (and, wrapped, the SwiftUI tint)
     let code: NSColor                   // inline code
-    let editorTint: Color?              // subtle tint layered over material (opacity ≤ 0.25)
-    let swatchBg: Color                 // opaque background for the settings swatch
+    private let tintHex: UInt?          // opaque swatch bg; also the ~0.2 editor tint. nil = System
+
+    var accentSwift: Color { Color(nsColor: accent) }
+    var editorTint: Color? { tintHex.map { Color(hex: $0).opacity(0.20) } }
+    var swatchBg: Color { tintHex.map { Color(hex: $0) } ?? Color(nsColor: .windowBackgroundColor) }
+
+    /// The common case: a preset from hex colors + a light/dark base.
+    init(id: String, base: ThemeBase, accent: UInt, code: UInt, tint: UInt) {
+        self.id = id; self.appearance = base.appearance
+        self.accent = NSColor(hex: accent); self.code = NSColor(hex: code); self.tintHex = tint
+    }
+    /// System: dynamic accent that follows the OS, no tint wash.
+    private init(system id: String) {
+        self.id = id; self.appearance = nil
+        self.accent = .controlAccentColor; self.code = .systemPurple; self.tintHex = nil
+    }
 
     static let all: [Theme] = [
-        Theme(id: "System", appearance: nil,
-              accentSwift: .accentColor, accent: .controlAccentColor, code: .systemPurple,
-              editorTint: nil, swatchBg: Color(nsColor: .windowBackgroundColor)),
-        Theme(id: "Sepia", appearance: .aqua,
-              accentSwift: Color(red: 0.66, green: 0.46, blue: 0.22),
-              accent: NSColor(red: 0.66, green: 0.46, blue: 0.22, alpha: 1),
-              code: NSColor(red: 0.60, green: 0.42, blue: 0.20, alpha: 1),
-              editorTint: Color(red: 0.96, green: 0.91, blue: 0.81).opacity(0.18),
-              swatchBg: Color(red: 0.96, green: 0.91, blue: 0.81)),
-        Theme(id: "Nord", appearance: .darkAqua,
-              accentSwift: Color(red: 0.53, green: 0.75, blue: 0.82),
-              accent: NSColor(red: 0.53, green: 0.75, blue: 0.82, alpha: 1),
-              code: NSColor(red: 0.64, green: 0.75, blue: 0.55, alpha: 1),
-              editorTint: Color(red: 0.18, green: 0.20, blue: 0.25).opacity(0.22),
-              swatchBg: Color(red: 0.18, green: 0.20, blue: 0.25)),
-        Theme(id: "Dracula", appearance: .darkAqua,
-              accentSwift: Color(red: 0.74, green: 0.58, blue: 0.98),
-              accent: NSColor(red: 0.74, green: 0.58, blue: 0.98, alpha: 1),
-              code: NSColor(red: 0.31, green: 0.90, blue: 0.48, alpha: 1),
-              editorTint: Color(red: 0.16, green: 0.16, blue: 0.21).opacity(0.22),
-              swatchBg: Color(red: 0.16, green: 0.16, blue: 0.21)),
-        Theme(id: "Solarized Light", appearance: .aqua,
-              accentSwift: Color(red: 0.15, green: 0.55, blue: 0.82),
-              accent: NSColor(red: 0.15, green: 0.55, blue: 0.82, alpha: 1),
-              code: NSColor(red: 0.52, green: 0.60, blue: 0.00, alpha: 1),
-              editorTint: Color(red: 0.99, green: 0.96, blue: 0.89).opacity(0.16),
-              swatchBg: Color(red: 0.99, green: 0.96, blue: 0.89)),
+        Theme(system: "System"),
+        Theme(id: "Sepia",            base: .light, accent: 0xA87538, code: 0x996B33, tint: 0xF5E8CF),
+        Theme(id: "Nord",             base: .dark,  accent: 0x87BFD1, code: 0xA3BF8C, tint: 0x2E3340),
+        Theme(id: "Dracula",          base: .dark,  accent: 0xBD94FA, code: 0x4FE67A, tint: 0x292936),
+        Theme(id: "Solarized Light",  base: .light, accent: 0x268CD1, code: 0x859900, tint: 0xFCF5E3),
     ]
 
     static func named(_ id: String) -> Theme { all.first { $0.id == id } ?? all[0] }
+}
+
+extension Color {
+    init(hex: UInt) {
+        self.init(.sRGB, red: Double((hex >> 16) & 0xFF) / 255,
+                  green: Double((hex >> 8) & 0xFF) / 255, blue: Double(hex & 0xFF) / 255)
+    }
+}
+
+extension NSColor {
+    convenience init(hex: UInt) {
+        self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+                  green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
 }
 
 /// Central motion tokens. `reduce` is read at interaction time (no observer), and a
@@ -146,10 +163,13 @@ struct NavBar<L: View, C: View, R: View>: View {
 }
 
 /// Uniformly sized nav-bar glyph so mixed SF Symbols line up and space evenly.
+/// A square box + fixed weight makes every glyph center identically, so the left
+/// cluster (library/new) and right cluster (settings/minimize/close) align exactly.
 func navIcon(_ name: String) -> some View {
     Image(systemName: name)
-        .font(.system(size: 13))
-        .frame(width: 24, height: 22)
+        .font(.system(size: 13, weight: .regular))
+        .imageScale(.medium)
+        .frame(width: 24, height: 24)
         .contentShape(Rectangle())
 }
 
@@ -534,6 +554,24 @@ struct LibraryView: View {
 
     private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    private var newNoteHelp: String {
+        switch source {
+        case .folder(let f): return "New note in \(f)"
+        case .daily: return "Open today's daily note"
+        default: return "New note in Inbox (⌘N)"
+        }
+    }
+
+    /// New note lands where you're browsing: a folder → that folder; Daily → today's
+    /// note (the only note Daily can hold); Recent/Inbox → the Inbox (repo root).
+    private func newNoteHere() {
+        switch source {
+        case .daily: store.open(store.dailyNote())
+        case .folder(let f): store.newNote(in: f)
+        default: store.newNote()
+        }
+    }
+
     private var notes: [URL] {
         let m = store.matches(query)
         guard !searching else { return m } // a search spans every folder
@@ -563,8 +601,12 @@ struct LibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             ChromeBar(store: store, title: "Library") {
-                Button { store.screen = .capture } label: { navIcon("chevron.left") }
-                    .help("Back to note (⌘L / Esc)")
+                HStack(spacing: 4) {
+                    Button { store.screen = .capture } label: { navIcon("chevron.left") }
+                        .help("Back to note (⌘L / Esc)")
+                    Button { newNoteHere() } label: { navIcon("square.and.pencil") }
+                        .help(newNoteHelp)
+                }
             }
 
             // full-width search — spans every folder, above the two columns
@@ -581,7 +623,7 @@ struct LibraryView: View {
                         .buttonStyle(.borderless).foregroundStyle(.tertiary)
                 }
             }
-            .padding(.horizontal, 12).padding(.bottom, 8)
+            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8) // breathe below the chrome bar
             Divider().opacity(0.4)
 
             HStack(spacing: 0) {
@@ -735,9 +777,15 @@ struct FolderRailRow: View {
                 Button("Rename…", action: rename)
                 Button("Delete Folder", role: .destructive, action: delete)
             } label: {
-                Image(systemName: "ellipsis").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "ellipsis")
+                    .rotationEffect(.degrees(90)) // vertical ⋮ (no single SF symbol for it)
+                    .font(.caption)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .tint(.secondary) // borderlessButton tints its label with accent; force it to match the chrome
+            .foregroundStyle(.secondary)
+            .frame(width: 22, height: 22)      // same hit box as a navIcon so it lines up
+            .contentShape(Rectangle())
             .opacity(hovering ? 1 : 0)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)

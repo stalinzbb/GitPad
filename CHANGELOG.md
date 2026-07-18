@@ -16,6 +16,24 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 - Docs: `CHANGELOG.md`, `CLAUDE.md`, and `GROWTH.md` added; README architecture,
   shortcuts, and screenshots sections refreshed.
 
+### Bug fixes (testing pass)
+
+- Library now has a **New Note** button (next to Back); it creates the note where
+  you're browsing — a folder → that folder, Daily → today's note, Recent/Inbox → Inbox.
+- `newNote(in:)` is folder-aware; ⌘N still creates in Inbox, and the empty-scratch reuse
+  is scoped to the same folder so a new note in folder B doesn't reuse an empty note in A.
+- Folder ⋯ menu is now **vertical (⋮)** and uses the secondary chrome color instead of
+  rendering accent-blue; sized to a nav-icon hit box so it lines up.
+- Daily-note title carries the **full date incl. year** ("Friday, 18 July 2026").
+- More breathing room between the Library chrome bar and the search field.
+- Nav-bar glyphs use a square box + fixed weight so the left (library/new) and right
+  (settings/minimize/close) icon clusters align exactly.
+- Pill collapse/expand is **snappier** — ~0.2s strong ease-out instead of the mushy
+  built-in ease-in-out (still instant under Reduce Motion). Also reachable via ⌘M and
+  a double-click on the title bar.
+- Themes refactored to hex-preset rows (base + 3 colors) so adding one is a one-liner;
+  no behavior change to the five shipping themes.
+
 ## [0.8] — 2026-07-18
 
 - Appearance-driven themes (each flips the whole window light/dark so every native

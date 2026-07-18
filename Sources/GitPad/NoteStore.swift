@@ -174,7 +174,7 @@ final class NoteStore: ObservableObject {
         let url = daily.appendingPathComponent(name.string(from: Date()) + ".md")
         if !FileManager.default.fileExists(atPath: url.path) {
             let header = DateFormatter()
-            header.dateFormat = "EEEE, d MMMM" // fixed, date-based title
+            header.dateFormat = "EEEE, d MMMM yyyy" // fixed, date-based title (full date for the day it's created)
             try? "# \(header.string(from: Date()))\n\n"
                 .write(to: url, atomically: true, encoding: .utf8)
             refresh()
@@ -182,10 +182,13 @@ final class NoteStore: ObservableObject {
         return url
     }
 
+    /// Create a new note in `folder` (nil = Inbox / repo root). ⌘N passes nil; the
+    /// Library's New Note button passes the folder you're browsing.
     @discardableResult
-    func newNote() -> URL {
-        // debounce: reuse a still-empty scratch note or ignore rapid presses
+    func newNote(in folder: String? = nil) -> URL {
+        // debounce: reuse a still-empty scratch note *in the same folder*, or ignore rapid presses
         if let sel = selected, sel.lastPathComponent.hasPrefix("note-"),
+           self.folder(of: sel) == folder,
            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             screen = .capture
             return sel
@@ -194,7 +197,9 @@ final class NoteStore: ObservableObject {
         lastNew = Date()
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        let url = dir.appendingPathComponent("note-\(stamp).md")
+        let base = folder.map { dir.appendingPathComponent($0) } ?? dir
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let url = base.appendingPathComponent("note-\(stamp).md")
         try? "# ".write(to: url, atomically: true, encoding: .utf8) // start typing the title
         refresh()
         selected = url

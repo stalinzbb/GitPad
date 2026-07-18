@@ -54,8 +54,10 @@ final class PanelWindow: NSPanel {
         }
         let animate = !Motion.reduce
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = animate ? 0.25 : 0
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            // snappy: strong ease-out (fast start = responsive) at ~0.2s, not the mushy
+            // built-in easeInEaseOut. The pill toggles often, so it must feel instant.
+            ctx.duration = animate ? 0.2 : 0
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
             contentView?.layer?.cornerRadius = radius
             (animate ? animator() : self).setFrame(target, display: true)
         }
