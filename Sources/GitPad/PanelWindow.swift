@@ -42,17 +42,23 @@ final class PanelWindow: NSPanel {
     /// Collapse to a 240×40 lozenge (saving the expanded frame) or restore it.
     func applyPill(_ pill: Bool) {
         isMovableByWindowBackground = !pill // pill drags via its own gesture (tap = expand)
+        let target: NSRect
+        let radius: CGFloat
         if pill {
             expandedFrame = frame
-            let f = NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40)
-            contentView?.layer?.cornerRadius = 20 // → height/2
-            setFrame(f, display: true, animate: true)
-            orderFront(nil) // floats, but doesn't steal focus
+            target = NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40)
+            radius = 20 // → height/2
         } else {
-            let f = expandedFrame ?? NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560)
-            contentView?.layer?.cornerRadius = 14
-            setFrame(f, display: true, animate: true)
-            makeKeyAndOrderFront(nil)
+            target = expandedFrame ?? NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560)
+            radius = 14
         }
+        let animate = !Motion.reduce
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = animate ? 0.25 : 0
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            contentView?.layer?.cornerRadius = radius
+            (animate ? animator() : self).setFrame(target, display: true)
+        }
+        if pill { orderFront(nil) } else { makeKeyAndOrderFront(nil) } // pill floats without stealing focus
     }
 }

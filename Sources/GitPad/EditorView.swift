@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox // kVK_Escape for the hotkey recorder
 
 // MARK: - Themes (token set consumed by the editor + chrome)
 
@@ -45,6 +46,16 @@ struct Theme: Identifiable {
     static func named(_ id: String) -> Theme { all.first { $0.id == id } ?? all[0] }
 }
 
+/// Central motion tokens. `reduce` is read at interaction time (no observer), and a
+/// nil animation means "instant" — so Reduce Motion falls out for free everywhere.
+enum Motion {
+    static var reduce: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    // screen: critically-damped reposition; quick: snappy hover; pop: momentum bounce.
+    static var screen: Animation? { reduce ? nil : .spring(response: 0.32, dampingFraction: 0.85) }
+    static var quick:  Animation? { reduce ? nil : .spring(response: 0.18, dampingFraction: 0.9) }
+    static var pop:    Animation? { reduce ? nil : .spring(response: 0.30, dampingFraction: 0.7) }
+}
+
 /// Ambient sync-state color, shared by every NavBar dot + the pill.
 func syncColor(_ status: SyncStatus) -> Color {
     switch status {
@@ -82,10 +93,6 @@ struct EditorView: View {
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .frame(minWidth: store.pill ? 0 : 280, minHeight: store.pill ? 0 : 180)
-        .background( // ⌘M minimizes to pill from any screen
-            Button("") { if !store.pill { store.setPill?(true) } }
-                .keyboardShortcut("m").opacity(0)
-        )
         .onAppear { store.applyAppearance?(theme.appearance) }
         .onChange(of: themeID) { _ in store.applyAppearance?(theme.appearance) }
     }
@@ -114,7 +121,7 @@ struct EditorView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.85), value: store.screen)
+        .animation(Motion.screen, value: store.screen)
     }
 }
 
@@ -229,7 +236,7 @@ struct PillView: View {
                     }
                 }
         )
-        .help("Tap to expand (⌥Space)")
+        .help("Tap to expand (\(Hotkey.display))")
     }
 }
 
@@ -262,10 +269,8 @@ struct CaptureView: View {
                 HStack(spacing: 4) {
                     Button { store.screen = .library } label: { navIcon("square.grid.2x2") }
                         .help("Library (⌘L)")
-                        .keyboardShortcut("l")
                     Button { store.newNote() } label: { navIcon("square.and.pencil") }
                         .help("New note (⌘N)")
-                        .keyboardShortcut("n")
                 }
             }
 
@@ -274,14 +279,8 @@ struct CaptureView: View {
                              design: fontDesign,
                              themeID: themeID)
         }
-        .background(Group {
-            Button("") { store.deleteCurrent() }
-                .keyboardShortcut(.delete, modifiers: .command)
-            Button("") { store.saveNow() } // saveNow fires onSaved → git commit & push
-                .keyboardShortcut("s")
-            Button("") { store.openSettings() }
-                .keyboardShortcut(",")
-        }.opacity(0))
+        // ⌘N/⌘L/⌘S/⌘⌫/⌘M/⌘, are handled by the main-menu "Note" submenu in AppDelegate,
+        // so they work from every screen — not just here.
     }
 
     private func subtitle(for sel: URL) -> String {
@@ -340,6 +339,9 @@ struct SettingsView: View {
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
                 }
+                Section("Global Hotkey") {
+                    HotkeyRecorder()
+                }
                 Section("Sync") {
                     Button {
                         store.screen = .gitSetup
@@ -363,10 +365,8 @@ struct SettingsView: View {
                         }
                         .font(.callout).foregroundStyle(.secondary)
                     }
-                    Button("Sync Now") {
-                        store.requestSync?()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { refreshGitInfo() }
-                    }
+                    Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
+                        .disabled(store.syncing)
                 }
                 if !store.conflicts.isEmpty {
                     Section("Conflicts — both machines edited the same note") {
@@ -400,6 +400,7 @@ struct SettingsView: View {
                                     .overlay(Circle().strokeBorder(
                                         Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
                                         lineWidth: themeID == t.id ? 2 : 1))
+                                    .animation(Motion.quick, value: themeID)
                             }
                             .buttonStyle(.plain)
                             .help(t.id)
@@ -412,12 +413,14 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
         }
         .onAppear { refreshGitInfo() }
+        // backgroundSync publishes a fresh .synced(Date) on each cycle → refresh ahead/behind
+        // exactly when sync finishes, instead of guessing with a 2s delay.
+        .onChange(of: store.syncStatus) { _ in refreshGitInfo() }
     }
 
     private func saveRemote() {
         GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
         store.requestSync?()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { refreshGitInfo() }
     }
 
     private func refreshGitInfo() {
@@ -428,6 +431,65 @@ struct SettingsView: View {
                 if remote.isEmpty { remote = url }
                 aheadBehind = ab
             }
+        }
+    }
+}
+
+/// Records a new global hotkey: click to arm, then press a modified key combo.
+/// A local key-down monitor captures (and consumes) the first press; Esc cancels.
+struct HotkeyRecorder: View {
+    @State private var recording = false
+    @State private var display = Hotkey.display
+    @State private var monitor: Any?
+    @State private var warning: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Shortcut")
+                Spacer()
+                Button(recording ? "Press keys…  (Esc cancels)" : display) {
+                    recording ? stop() : start()
+                }
+                .frame(minWidth: 150)
+            }
+            Text(warning ?? "Press \(display) from any app to summon GitPad.")
+                .font(.caption)
+                .foregroundStyle(warning == nil ? .secondary : Color.orange)
+        }
+        .onDisappear(perform: stop) // never leave a live monitor behind
+    }
+
+    private func start() {
+        recording = true
+        warning = nil
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handle(event)
+            return nil // consume every key-down while recording
+        }
+    }
+
+    private func stop() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        recording = false
+    }
+
+    private func handle(_ event: NSEvent) {
+        if Int(event.keyCode) == kVK_Escape { stop(); return }
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard !flags.isEmpty else { warning = "Add a modifier — ⌘, ⌥, ⌃, or ⇧"; return }
+        let mods = Hotkey.carbonModifiers(flags)
+        let combo = Hotkey.displayString(flags, keyCode: event.keyCode,
+                                         chars: event.charactersIgnoringModifiers ?? "")
+        if Hotkey.apply(keyCode: UInt32(event.keyCode), modifiers: mods) {
+            let d = UserDefaults.standard
+            d.set(Int(event.keyCode), forKey: "hotkeyKeyCode")
+            d.set(Int(mods), forKey: "hotkeyModifiers")
+            d.set(combo, forKey: "hotkeyDisplay")
+            display = combo
+            stop()
+        } else {
+            warning = "\(combo) is already in use — try another" // keep recording
         }
     }
 }
@@ -488,12 +550,14 @@ struct LibraryView: View {
     private var groups: [(String, [URL])] {
         let cal = Calendar.current
         let weekAgo = Date().addingTimeInterval(-7 * 86400)
-        let m = notes
-        return [
-            ("Today", m.filter { cal.isDateInToday(store.modified($0)) }),
-            ("This Week", m.filter { !cal.isDateInToday(store.modified($0)) && store.modified($0) > weekAgo }),
-            ("Earlier", m.filter { store.modified($0) <= weekAgo }),
-        ].filter { !$1.isEmpty }
+        let pinnedSet = Set(store.pinnedNotes().map(\.path))
+        let pinned = notes.filter { pinnedSet.contains($0.path) }
+        let rest = notes.filter { !pinnedSet.contains($0.path) }
+        return ([("Pinned", pinned)] + [
+            ("Today", rest.filter { cal.isDateInToday(store.modified($0)) }),
+            ("This Week", rest.filter { !cal.isDateInToday(store.modified($0)) && store.modified($0) > weekAgo }),
+            ("Earlier", rest.filter { store.modified($0) <= weekAgo }),
+        ]).filter { !$1.isEmpty }
     }
 
     var body: some View {
@@ -501,7 +565,6 @@ struct LibraryView: View {
             ChromeBar(store: store, title: "Library") {
                 Button { store.screen = .capture } label: { navIcon("chevron.left") }
                     .help("Back to note (⌘L / Esc)")
-                    .keyboardShortcut("l")
             }
 
             // full-width search — spans every folder, above the two columns
@@ -511,6 +574,8 @@ struct LibraryView: View {
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit { if let first = notes.first { store.open(first) } }
+                    // Esc clears an active search first; only then leaves the Library.
+                    .onExitCommand { if searching { query = "" } else { store.goBack() } }
                 if searching {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.tertiary)
@@ -646,6 +711,9 @@ struct LibraryView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        // animate the empty↔populated / group swap on search only — NOT on refresh(),
+        // which fires every 5-min sync and would churn rows.
+        .animation(Motion.quick, value: query)
         .onAppear { searchFocused = true }
     }
 }
@@ -679,6 +747,7 @@ struct FolderRailRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
         .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
         .contextMenu {
             Button("Rename…", action: rename)
             Button("Delete Folder", role: .destructive, action: delete)
@@ -707,12 +776,14 @@ struct NoteRow: View {
             Spacer()
             Menu {
                 Button("Open") { store.open(url) }
+                Button(store.isPinned(url) ? "Unpin" : "Pin") { store.togglePin(url) }
                 Menu("Move to") {
                     Button("Notes") { store.move(url, to: nil) }
                     ForEach(store.folders, id: \.self) { f in
                         Button(f) { store.move(url, to: f) }
                     }
                 }
+                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 Divider()
                 Button("Delete", role: .destructive) { store.delete(url) }
             } label: {
@@ -728,6 +799,7 @@ struct NoteRow: View {
         .contentShape(Rectangle())
         .onTapGesture { store.open(url) }
         .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
     }
 }
 
@@ -1118,6 +1190,8 @@ final class SmartTextView: NSTextView {
                 let boxR = NSRange(location: lineR.location + m.range(at: 2).location, length: 1)
                 let checked = ns.substring(with: boxR) == "☑"
                 insertText(checked ? "☐" : "☑", replacementRange: boxR)
+                // tactile confirmation on the same event that flips the box (causality)
+                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
                 return
             }
         }

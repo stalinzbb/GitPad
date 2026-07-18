@@ -15,11 +15,16 @@ subscription, no Electron.
 - **Plain Markdown** — every note is a real `.md` file in `~/Documents/GitPad/`, readable and editable by any other tool.
 - **Smart editor** — live markdown styling, slash commands (`/` at the caret), auto-continuing lists and checkboxes, clickable to-dos, a select-text mini toolbar.
 - **Daily notes** — ⌥Space always lands on today's note; ⌘N for a fresh one.
-- **Library** — search-as-you-type, Today / This Week / Earlier, folders.
+- **Library** — search-as-you-type, Pinned / Today / This Week / Earlier, folders. Pin notes and reveal any in Finder from the ⋯ menu.
+- **Quick capture from anywhere else** — the `gitpad://` URL scheme (`new?text=`, `daily`, `daily?append=`) drives GitPad from Raycast, Alfred, Shortcuts.app, or a shell script; "Append Clipboard to Daily" and your recent notes live in the status-bar menu.
 - **Invisible git sync** — commits, merges and pushes on every save, every 5 minutes, and on wake. Real conflicts resolve automatically with nothing lost (the remote copy is kept alongside).
 - **Pill mode** — collapse the whole UI to a draggable 240×40 lozenge that floats over your work; ⌥Space springs it back.
 - **Themes** — System, Sepia, Nord, Dracula, Solarized Light. Each flips the whole window's appearance so every control adapts, not just a color wash.
-- **Zero dependencies** — Swift + SwiftUI/AppKit, six source files, built with SwiftPM.
+- **Zero dependencies** — Swift + SwiftUI/AppKit, seven source files, built with SwiftPM.
+
+## Screenshots
+
+_Coming soon — the capture panel, the library, and the theme strip. (See [GROWTH.md](GROWTH.md) for the landing-page plan these feed into.)_
 
 ## Install
 
@@ -42,7 +47,9 @@ Homebrew cask is on the roadmap.
 | ⌘L | Library ⇄ note |
 | ⌘S | Save now (also commits + pushes) |
 | ⌘⌫ | Delete current note |
-| Esc | Back one level / hide |
+| ⌘M | Minimize to pill |
+| ⌘, | Settings |
+| Esc | Back one level (clears search first in Library) / hide |
 
 ## Sync setup
 
@@ -56,16 +63,17 @@ one-click "Create a private repo for me".
 
 ## Architecture
 
-Six files, no third-party dependencies:
+Seven files, no third-party dependencies:
 
 | File | Role |
 |------|------|
 | `main.swift` | Entry point; also a `--sync <dir>` CLI mode used by tests |
-| `GitPadApp.swift` | AppDelegate: status item, global hotkey, sync scheduling |
+| `GitPadApp.swift` | AppDelegate: status item, main-menu shortcuts, global hotkey, sync scheduling |
 | `PanelWindow.swift` | The floating NSPanel + pill frame logic |
-| `NoteStore.swift` | File listing, load/save, debounced autosave, trash-delete |
+| `NoteStore.swift` | File listing, load/save, debounced autosave, trash-delete, search index |
 | `GitSync.swift` | All git operations via `Process` on `/usr/bin/git` |
 | `EditorView.swift` | SwiftUI chrome + NSTextView editor with markdown styling |
+| `OnboardingView.swift` | First-run walkthrough + the reusable git-setup guide |
 
 Storage is the filesystem; the sync "backend" is whatever git remote you point it
 at. See [SECURITY.md](SECURITY.md) for the threat model and [ROADMAP.md](ROADMAP.md)

@@ -6,14 +6,14 @@ struct OnboardingView: View {
     @State private var remote = ""
     @AppStorage("onboarded") private var onboarded = false
 
-    private let pages: [(symbol: String, title: String, body: String)] = [
+    private var pages: [(symbol: String, title: String, body: String)] { [
         ("keyboard", "Instant capture",
-         "Press ⌥ Space from anywhere.\nGitPad floats over whatever you're doing."),
+         "Press \(Hotkey.display) from anywhere.\nGitPad floats over whatever you're doing."),
         ("text.badge.checkmark", "Just type",
          "It saves itself. Type / for commands,\n⌘N for a new note, ⌘L for your library."),
         ("arrow.triangle.branch", "Sync with git",
          "Optional. Create a private repo (github.com/new),\npaste its SSH URL, and your notes follow you everywhere.\nUses your existing SSH keys — nothing to log into."),
-    ]
+    ] }
     @State private var testResult: String?
 
     var body: some View {
@@ -50,7 +50,7 @@ struct OnboardingView: View {
                 }
             }
             Button(step < 2 ? "Continue" : "Start writing") {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                withAnimation(Motion.pop) {
                     if step < 2 { step += 1 } else { finish() }
                 }
             }
@@ -66,7 +66,7 @@ struct OnboardingView: View {
             .font(.system(size: 44, weight: .light))
             .foregroundStyle(.tint)
         Group {
-            if #available(macOS 14.0, *) {
+            if #available(macOS 14.0, *), !Motion.reduce {
                 img.symbolEffect(.bounce, value: step)
             } else {
                 img

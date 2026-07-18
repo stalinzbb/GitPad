@@ -28,12 +28,23 @@ final class NoteStore: ObservableObject {
     }
     @Published var pill = false
     @Published var screen: Screen = .capture
+    // ponytail: per-Mac pins (paths relative to `dir`); move to a .pinned file in the repo if cross-Mac requested
+    @Published var pinned: [String] = UserDefaults.standard.stringArray(forKey: "pinned") ?? []
     private var settingsReturn: Screen = .capture
 
     /// Open Settings from any screen, remembering where to return.
     func openSettings() {
         if screen != .settings && screen != .gitSetup { settingsReturn = screen }
         screen = .settings
+    }
+
+    /// ⌘L: flip between the note and the library (no-op during onboarding).
+    func toggleLibrary() {
+        switch screen {
+        case .library: screen = .capture
+        case .onboarding: break
+        default: screen = .library
+        }
     }
 
     /// One step back for Esc / the back chevron.
@@ -54,9 +65,12 @@ final class NoteStore: ObservableObject {
     var pillDragEnded: (() -> Void)?
     var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
+    @Published var syncing = false
     private var loading = false
     private var saveWork: DispatchWorkItem?
     private var titleCache: [URL: (title: String, mtime: Date)] = [:]
+    // ponytail: main-thread reads; background index only if libraries hit thousands of notes
+    private var contentCache: [URL: (text: String, mtime: Date)] = [:]
     private var lastNew = Date.distantPast
 
     init() {
@@ -110,7 +124,7 @@ final class NoteStore: ObservableObject {
         guard !fm.fileExists(atPath: dst.path) else { return }
         let sel = selected
         try? fm.moveItem(at: dir.appendingPathComponent(name), to: dst)
-        titleCache.removeAll()
+        titleCache.removeAll(); contentCache.removeAll()
         refresh()
         if let s = sel, s.deletingLastPathComponent().lastPathComponent == name {
             selected = dst.appendingPathComponent(s.lastPathComponent)
@@ -130,7 +144,7 @@ final class NoteStore: ObservableObject {
             try? fm.moveItem(at: item, to: dest)
         }
         try? fm.removeItem(at: folder)
-        titleCache.removeAll()
+        titleCache.removeAll(); contentCache.removeAll()
         refresh()
     }
 
@@ -139,7 +153,11 @@ final class NoteStore: ObservableObject {
             .appendingPathComponent(url.lastPathComponent)
         guard dest.path != url.path else { return }
         try? FileManager.default.moveItem(at: url, to: dest)
-        titleCache[url] = nil
+        titleCache[url] = nil; contentCache[url] = nil
+        if let i = pinned.firstIndex(of: rel(url)) { // keep the pin pointing at the new path
+            pinned[i] = rel(dest)
+            UserDefaults.standard.set(pinned, forKey: "pinned")
+        }
         let wasSelected = selected?.path == url.path
         refresh()
         if wasSelected { selected = dest }
@@ -189,9 +207,52 @@ final class NoteStore: ObservableObject {
         screen = .capture
     }
 
+    /// Append text to today's note — used by the clipboard menu item and
+    /// `gitpad://daily?append=`. If the daily note is open, append into the live
+    /// editor buffer so in-flight edits aren't clobbered.
+    func appendToDaily(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let url = dailyNote()
+        if selected?.path == url.path {
+            if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+            text += trimmed + "\n"
+            saveNow()
+        } else {
+            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            let sep = existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
+            try? (existing + sep + trimmed + "\n").write(to: url, atomically: true, encoding: .utf8)
+            contentCache[url] = nil; titleCache[url] = nil
+            onSaved?()
+            refresh()
+        }
+    }
+
+    // MARK: pinning
+
+    private func rel(_ url: URL) -> String {
+        url.path.hasPrefix(dir.path + "/") ? String(url.path.dropFirst(dir.path.count + 1)) : url.lastPathComponent
+    }
+
+    func isPinned(_ url: URL) -> Bool { pinned.contains(rel(url)) }
+
+    func togglePin(_ url: URL) {
+        let r = rel(url)
+        if let i = pinned.firstIndex(of: r) { pinned.remove(at: i) } else { pinned.append(r) }
+        UserDefaults.standard.set(pinned, forKey: "pinned")
+    }
+
+    /// Currently-pinned notes that still exist, in pin order.
+    func pinnedNotes() -> [URL] {
+        pinned.compactMap { r in
+            let u = dir.appendingPathComponent(r)
+            return notes.contains { $0.path == u.path } ? u : nil
+        }
+    }
+
     func delete(_ url: URL) {
         try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        titleCache[url] = nil
+        titleCache[url] = nil; contentCache[url] = nil
         refresh()
     }
 
@@ -248,8 +309,18 @@ final class NoteStore: ObservableObject {
         guard !q.isEmpty else { return notes }
         return notes.filter {
             title(for: $0).lowercased().contains(q) ||
-            (q.count >= 2 && ((try? String(contentsOf: $0, encoding: .utf8))?.lowercased().contains(q) ?? false))
+            (q.count >= 2 && content(of: $0).contains(q))
         }
+    }
+
+    /// Lowercased file body, mtime-validated (mirrors `titleCache`) so search
+    /// doesn't re-read every file on each keystroke.
+    private func content(of url: URL) -> String {
+        let mt = modified(url)
+        if let c = contentCache[url], c.mtime == mt { return c.text }
+        let text = (try? String(contentsOf: url, encoding: .utf8))?.lowercased() ?? ""
+        contentCache[url] = (text, mt)
+        return text
     }
 
     func modified(_ url: URL) -> Date {
@@ -285,6 +356,7 @@ final class NoteStore: ObservableObject {
     func saveNow() {
         guard let url = selected else { return }
         try? Self.toMarkdown(text).write(to: url, atomically: true, encoding: .utf8)
+        contentCache[url] = nil // body changed → search re-reads next time
         onSaved?()
     }
 }
