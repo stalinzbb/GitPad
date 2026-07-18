@@ -2,6 +2,19 @@ import Foundation
 
 enum Screen { case onboarding, capture, library, settings }
 
+enum SyncStatus: Equatable {
+    case unknown, noRemote, synced(Date), offline
+
+    var label: String {
+        switch self {
+        case .unknown: return "—"
+        case .noRemote: return "Local only — no remote set"
+        case .synced(let d): return "Synced \(d.formatted(date: .omitted, time: .shortened))"
+        case .offline: return "Can't reach remote — will retry"
+        }
+    }
+}
+
 final class NoteStore: ObservableObject {
     let dir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Documents/GitPad")
@@ -17,6 +30,8 @@ final class NoteStore: ObservableObject {
 
     var onSaved: (() -> Void)?
     var onHide: (() -> Void)?
+    var requestSync: (() -> Void)?
+    @Published var syncStatus: SyncStatus = .unknown
     private var loading = false
     private var saveWork: DispatchWorkItem?
     private var titleCache: [URL: (title: String, mtime: Date)] = [:]
@@ -122,6 +137,38 @@ final class NoteStore: ObservableObject {
         try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
         titleCache[url] = nil
         refresh()
+    }
+
+    // MARK: conflict copies (created by GitSync when both machines edit the same note)
+
+    var conflicts: [URL] {
+        notes.filter { $0.lastPathComponent.contains(" (conflict ") }
+    }
+
+    func original(for conflictCopy: URL) -> URL? {
+        guard let base = conflictCopy.lastPathComponent.components(separatedBy: " (conflict ").first
+        else { return nil }
+        let url = conflictCopy.deletingLastPathComponent().appendingPathComponent(base + ".md")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Replace the original note with the conflict copy's content, then remove the copy.
+    func resolveKeep(_ conflictCopy: URL) {
+        guard let orig = original(for: conflictCopy),
+              let content = try? String(contentsOf: conflictCopy, encoding: .utf8) else {
+            delete(conflictCopy)
+            return
+        }
+        try? content.write(to: orig, atomically: true, encoding: .utf8)
+        if selected?.path == orig.path { selected = orig } // reload
+        delete(conflictCopy)
+        onSaved?()
+    }
+
+    /// Keep the original; trash the conflict copy.
+    func resolveDiscard(_ conflictCopy: URL) {
+        delete(conflictCopy)
+        onSaved?()
     }
 
     func deleteCurrent() {

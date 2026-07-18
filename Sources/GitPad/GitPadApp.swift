@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         store.onSaved = { [weak self] in self?.backgroundSync() }
         store.onHide = { [weak self] in self?.panel.orderOut(nil) }
+        store.requestSync = { [weak self] in self?.backgroundSync() }
         syncTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.backgroundSync() }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
@@ -90,9 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func backgroundSync() {
         let dir = store.dir
         syncQueue.async { [weak self] in
+            let hasRemote = GitSync.run(["remote", "get-url", "origin"], in: dir).status == 0
             let ok = GitSync.sync(dir: dir)
             DispatchQueue.main.async {
-                self?.statusItem.button?.contentTintColor = ok ? nil : .systemOrange
+                self?.statusItem.button?.contentTintColor = (ok || !hasRemote) ? nil : .systemOrange
+                self?.store.syncStatus = !hasRemote ? .noRemote : ok ? .synced(Date()) : .offline
                 self?.store.refresh() // pick up files pulled from remote
             }
         }

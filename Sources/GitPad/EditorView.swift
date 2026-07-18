@@ -99,6 +99,8 @@ struct SettingsView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
+    @State private var remote = ""
+    @State private var aheadBehind: (ahead: Int, behind: Int)?
 
     // (tag, label) — system designs plus Apple-bundled note-friendly fonts.
     // Nothing here ships with the app, so open-sourcing stays clean.
@@ -144,6 +146,46 @@ struct SettingsView: View {
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
                 }
+                Section("Sync") {
+                    HStack {
+                        TextField("git@github.com:you/notes.git", text: $remote)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { saveRemote() }
+                        Button("Save") { saveRemote() }
+                            .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    LabeledContent("Status") {
+                        HStack(spacing: 6) {
+                            Circle().fill(statusColor).frame(width: 7, height: 7)
+                            Text(store.syncStatus.label)
+                            if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
+                                Text("↑\(ab.ahead) ↓\(ab.behind)").foregroundStyle(.tertiary)
+                            }
+                        }
+                        .font(.callout).foregroundStyle(.secondary)
+                    }
+                    Button("Sync Now") {
+                        store.requestSync?()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { refreshGitInfo() }
+                    }
+                }
+                if !store.conflicts.isEmpty {
+                    Section("Conflicts — both machines edited the same note") {
+                        ForEach(store.conflicts, id: \.self) { copy in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(store.title(for: copy)).lineLimit(1)
+                                HStack(spacing: 10) {
+                                    Button("Compare") { store.open(copy) }
+                                    Button("Use This Version") { store.resolveKeep(copy) }
+                                    Button("Discard") { store.resolveDiscard(copy) }
+                                        .foregroundStyle(.red)
+                                }
+                                .font(.caption)
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                }
                 Section("Appearance") {
                     Picker("Theme", selection: .constant("system")) {
                         Text("System").tag("system")
@@ -156,6 +198,32 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
         }
+        .onAppear { refreshGitInfo() }
+    }
+
+    private var statusColor: Color {
+        switch store.syncStatus {
+        case .synced: return .green
+        case .offline: return .orange
+        default: return .secondary
+        }
+    }
+
+    private func saveRemote() {
+        GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
+        store.requestSync?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { refreshGitInfo() }
+    }
+
+    private func refreshGitInfo() {
+        DispatchQueue.global().async {
+            let url = GitSync.remoteURL(in: store.dir)
+            let ab = GitSync.aheadBehind(in: store.dir)
+            DispatchQueue.main.async {
+                if remote.isEmpty { remote = url }
+                aheadBehind = ab
+            }
+        }
     }
 }
 
@@ -165,7 +233,10 @@ struct LibraryView: View {
     @ObservedObject var store: NoteStore
     @State private var query = ""
     @State private var folder: String? = nil   // nil = All
+    @State private var creatingFolder = false
+    @State private var newFolderName = ""
     @FocusState private var searchFocused: Bool
+    @FocusState private var folderFieldFocused: Bool
 
     private var filtered: [URL] {
         store.matches(query).filter { folder == nil || store.folder(of: $0) == folder }
@@ -205,11 +276,30 @@ struct LibraryView: View {
                 HStack(spacing: 6) {
                     chip("All", nil)
                     ForEach(store.folders, id: \.self) { chip($0, $0) }
-                    Button { promptNewFolder() } label: {
-                        Image(systemName: "folder.badge.plus").font(.caption)
+                    if creatingFolder {
+                        TextField("Name", text: $newFolderName)
+                            .textFieldStyle(.plain)
+                            .font(.caption)
+                            .frame(width: 80)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.1), in: Capsule())
+                            .focused($folderFieldFocused)
+                            .onSubmit {
+                                store.createFolder(newFolderName)
+                                newFolderName = ""
+                                creatingFolder = false
+                            }
+                            .onExitCommand { creatingFolder = false }
+                    } else {
+                        Button {
+                            creatingFolder = true
+                            folderFieldFocused = true
+                        } label: {
+                            Image(systemName: "folder.badge.plus").font(.caption)
+                        }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
+                        .help("New folder")
                     }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary)
-                    .help("New folder")
                 }
                 .padding(.horizontal, 12).padding(.bottom, 8)
             }
@@ -245,17 +335,6 @@ struct LibraryView: View {
         .buttonStyle(.plain)
     }
 
-    private func promptNewFolder() {
-        let alert = NSAlert()
-        alert.messageText = "New folder"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            store.createFolder(field.stringValue)
-        }
-    }
 }
 
 struct NoteRow: View {

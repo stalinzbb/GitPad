@@ -20,6 +20,19 @@ enum GitSync {
         return (p.terminationStatus, out)
     }
 
+    static func remoteURL(in dir: URL) -> String {
+        run(["remote", "get-url", "origin"], in: dir).out
+    }
+
+    /// (unpushed, unpulled) commit counts vs origin, or nil if unknown.
+    static func aheadBehind(in dir: URL) -> (ahead: Int, behind: Int)? {
+        let branch = run(["rev-parse", "--abbrev-ref", "HEAD"], in: dir).out
+        let r = run(["rev-list", "--left-right", "--count", "HEAD...origin/\(branch)"], in: dir)
+        let parts = r.out.split(whereSeparator: { $0 == "\t" || $0 == " " }).compactMap { Int($0) }
+        guard r.status == 0, parts.count == 2 else { return nil }
+        return (parts[0], parts[1])
+    }
+
     static func setRemote(_ url: String, in dir: URL) {
         guard !url.isEmpty else { return }
         if run(["remote", "get-url", "origin"], in: dir).status == 0 {

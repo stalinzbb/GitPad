@@ -50,6 +50,27 @@ Swift + SwiftUI/AppKit, built with SwiftPM (no Xcode project). Zero third-party 
 - [x] Performance: title caching by mtime, paragraph-only re-highlighting per keystroke
 - [x] Hotkeys: ⌥Space toggle, ⌘N, ⌘L, ⌘⌫ delete note, Esc back/hide
 
+## Sync & Conflict Flows
+The design principle: git is invisible during writing; everything git-related lives in **Settings → Sync**.
+
+**States** (shown as a colored dot + label, also tints the menu-bar icon orange when out of sync):
+- *Local only* — no remote configured; app is fully functional offline
+- *Synced HH:MM* — last successful commit/pull/push
+- *Can't reach remote* — offline or auth failure; autosync retries on next save / 5 min / wake
+- Unpushed/unpulled counts shown as ↑n ↓m
+
+**Automatic conflict handling** (in `GitSync.sync`, no UI ever blocks writing):
+1. Clean merge → silent.
+2. True same-file conflict → local version wins in place; the remote version is saved alongside as `Name (conflict <date>).md`. Nothing is lost, sync continues.
+
+**Manual resolution** (Settings → Conflicts section, appears only when copies exist):
+- **Compare** — opens the conflict copy in the editor to eyeball against the original
+- **Use This Version** — conflict copy's content replaces the original, copy removed
+- **Discard** — keep the original, trash the copy
+Every resolution is just a file operation, so the next autosync commits and propagates it to other machines — resolving on one machine resolves it everywhere.
+
+**Remote management**: URL editable in Settings (stored in the notes repo's git config, not the app); Test button in onboarding runs `ls-remote`; Sync Now button for manual pushes.
+
 ## Issues / Challenges
 - **Fresh-app indexing**: until copied to /Applications, Spotlight/automation tools don't know the app exists.
 - **Rebase vs merge semantics**: `-X ours/theirs` swap meaning during rebase; sync uses plain merge (clean-first, then `-X ours` with conflict copies) to keep semantics predictable.
