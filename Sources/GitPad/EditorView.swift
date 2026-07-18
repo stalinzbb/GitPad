@@ -173,6 +173,8 @@ struct ChromeBar<L: View>: View {
                     .help("Close (Esc)")
             }
         }
+        // double-click the bar (title-bar convention) → minimize to pill
+        .simultaneousGesture(TapGesture(count: 2).onEnded { store.setPill?(true) })
     }
 }
 
@@ -185,16 +187,14 @@ struct NavCenter: View {
 
     var body: some View {
         VStack(spacing: 1) {
-            Text(title).font(.footnote.weight(.medium)).lineLimit(1)
-            if showSyncDot || subtitle != nil {
-                HStack(spacing: 4) {
-                    if showSyncDot {
-                        Circle().fill(syncColor(store.syncStatus)).frame(width: 5, height: 5)
-                    }
-                    if let subtitle {
-                        Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-                    }
+            HStack(spacing: 5) {
+                if showSyncDot {
+                    Circle().fill(syncColor(store.syncStatus)).frame(width: 6, height: 6)
                 }
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+            }
+            if let subtitle {
+                Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
         }
         .frame(maxWidth: 200)
@@ -470,8 +470,12 @@ struct LibraryView: View {
     // user folders shown in the rail (Daily is its own top-level item)
     private var folders: [String] { store.folders.filter { $0 != "Daily" } }
 
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+
     private var notes: [URL] {
-        store.matches(query).filter { url in
+        let m = store.matches(query)
+        guard !searching else { return m } // a search spans every folder
+        return m.filter { url in
             switch source {
             case .recent: return true
             case .daily: return store.folder(of: url) == "Daily"
@@ -500,8 +504,23 @@ struct LibraryView: View {
                     .keyboardShortcut("l")
             }
 
+            // full-width search — spans every folder, above the two columns
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search all notes…", text: $query)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onSubmit { if let first = notes.first { store.open(first) } }
+                if searching {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 12).padding(.bottom, 8)
+            Divider().opacity(0.4)
+
             HStack(spacing: 0) {
-                sourceRail
+                sourceRail.disabled(searching) // browsing is paused while searching everything
                 Divider()
                 noteColumn
             }
@@ -521,7 +540,12 @@ struct LibraryView: View {
                         Text("Folders")
                             .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
-                        ForEach(folders, id: \.self) { sourceRow(.folder($0)) }
+                        ForEach(folders, id: \.self) { f in
+                            FolderRailRow(name: f, selected: source == .folder(f),
+                                          select: { source = .folder(f) },
+                                          rename: { renameText = f; renaming = f },
+                                          delete: { deleting = f })
+                        }
                     }
                 }
                 .padding(.horizontal, 6).padding(.top, 8)
@@ -583,8 +607,8 @@ struct LibraryView: View {
         }
     }
 
-    @ViewBuilder private func sourceRow(_ s: LibrarySource) -> some View {
-        let row = Button { source = s } label: {
+    private func sourceRow(_ s: LibrarySource) -> some View {
+        Button { source = s } label: {
             Label(s.label, systemImage: s.symbol)
                 .font(.callout).lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -594,34 +618,15 @@ struct LibraryView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-
-        if case .folder(let f) = s {
-            row.contextMenu {
-                Button("Rename…") { renameText = f; renaming = f }
-                Button("Delete Folder", role: .destructive) { deleting = f }
-            }
-        } else {
-            row
-        }
     }
 
     // MARK: right column
 
     private var noteColumn: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search notes…", text: $query)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                    .onSubmit { if let first = notes.first { store.open(first) } }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            Divider().opacity(0.4)
-
             if groups.isEmpty {
                 Spacer()
-                Text(query.isEmpty ? "No notes here yet" : "No matches")
+                Text(searching ? "No matches" : "No notes here yet")
                     .font(.callout).foregroundStyle(.tertiary)
                 Spacer()
             } else {
@@ -642,6 +647,42 @@ struct LibraryView: View {
         }
         .frame(maxWidth: .infinity)
         .onAppear { searchFocused = true }
+    }
+}
+
+/// Folder row in the rail: tap to select; hover reveals an ⋯ menu; right-click too.
+struct FolderRailRow: View {
+    let name: String
+    let selected: Bool
+    let select: () -> Void
+    let rename: () -> Void
+    let delete: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Label(name, systemImage: "folder").font(.callout).lineLimit(1)
+            Spacer(minLength: 0)
+            Menu {
+                Button("Rename…", action: rename)
+                Button("Delete Folder", role: .destructive, action: delete)
+            } label: {
+                Image(systemName: "ellipsis").font(.caption).foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .opacity(hovering ? 1 : 0)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(selected ? Color.accentColor.opacity(0.18)
+                             : (hovering ? Color.primary.opacity(0.05) : .clear),
+                    in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: select)
+        .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Rename…", action: rename)
+            Button("Delete Folder", role: .destructive, action: delete)
+        }
     }
 }
 
