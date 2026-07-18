@@ -60,10 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func togglePanel() {
-        NSLog("GitPad: togglePanel, wasKey=%d", panel.isKeyWindow ? 1 : 0)
         if panel.isKeyWindow {
             panel.orderOut(nil)
         } else {
+            if store.screen != .onboarding {
+                store.screen = .capture
+                store.selected = store.dailyNote() // ⌥Space always lands on today
+            }
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }

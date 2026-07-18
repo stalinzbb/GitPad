@@ -41,6 +41,15 @@ Swift + SwiftUI/AppKit, built with SwiftPM (no Xcode project). Zero third-party 
 - [x] Git sync loop with automatic conflict resolution (tested end-to-end)
 - [x] Build script producing a signed .app; installed to /Applications
 
+### v0.2 — minimal UI overhaul
+- [x] Capture view is just the editor (no sidebar) with a whisper-thin header; vibrant translucent panel, hidden traffic lights
+- [x] ⌥Space opens **today's daily note** (`YYYY-MM-dd.md`, auto-headered); ⌘N fresh note
+- [x] **Library** is a separate full-panel view (⌘L): search-as-you-type, Today / This Week / Earlier groups, relative dates, Enter opens, Esc steps back
+- [x] Animated onboarding (3 steps, SF Symbols, spring transitions, optional git-remote step)
+- [x] Smart editor: slash commands (native menu at caret: title, bullets, todo, date, time, divider), auto list/number/checkbox continuation, clickable `- [ ]` checkboxes with strikethrough, select-text mini toolbar (bold/italic/code/make-todo)
+- [x] Performance: title caching by mtime, paragraph-only re-highlighting per keystroke
+- [x] Hotkeys: ⌥Space toggle, ⌘N, ⌘L, ⌘⌫ delete note, Esc back/hide
+
 ## Issues / Challenges
 - **Fresh-app indexing**: until copied to /Applications, Spotlight/automation tools don't know the app exists.
 - **Rebase vs merge semantics**: `-X ours/theirs` swap meaning during rebase; sync uses plain merge (clean-first, then `-X ours` with conflict copies) to keep semantics predictable.

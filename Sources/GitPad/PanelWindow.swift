@@ -2,7 +2,10 @@ import AppKit
 import SwiftUI
 
 final class PanelWindow: NSPanel {
+    private let store: NoteStore
+
     init(store: NoteStore) {
+        self.store = store
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 420),
             styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel, .resizable],
@@ -14,17 +17,29 @@ final class PanelWindow: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
+        backgroundColor = .clear
+        isOpaque = false
+        [.closeButton, .miniaturizeButton, .zoomButton].forEach {
+            standardWindowButton($0)?.isHidden = true
+        }
         contentView = NSHostingView(rootView: EditorView(store: store))
         center()
     }
 
     override var canBecomeKey: Bool { true }
-    override func cancelOperation(_ sender: Any?) { orderOut(nil) }
+
+    // Esc steps back: library → capture, then hide
+    override func cancelOperation(_ sender: Any?) {
+        if store.screen == .library {
+            store.screen = .capture
+        } else {
+            orderOut(nil)
+        }
+    }
 
     func applyCompact(_ compact: Bool) {
         var frame = self.frame
         if compact {
-            // pin to top-right corner as a small sticky
             let screen = NSScreen.main?.visibleFrame ?? .zero
             frame = NSRect(x: screen.maxX - 320, y: screen.maxY - 240, width: 300, height: 220)
         } else {
