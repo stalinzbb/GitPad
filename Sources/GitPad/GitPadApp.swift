@@ -2,25 +2,107 @@ import AppKit
 import SwiftUI
 import Carbon.HIToolbox
 
-private var hotkeyHandler: (() -> Void)?
+/// Global hotkey via Carbon. NSEvent global monitors can't *consume* the event, so
+/// Carbon stays. The event handler is installed exactly once; the binding is swapped
+/// in place (unregister-then-register) so re-applying never double-fires and never
+/// collides with our own previous registration.
+enum Hotkey {
+    static let defaultKeyCode = UInt32(kVK_Space)
+    static let defaultModifiers = UInt32(optionKey)
+    static let defaultDisplay = "⌥Space"
 
-func registerHotkey(_ handler: @escaping () -> Void) {
-    hotkeyHandler = handler
-    var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-    InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-        hotkeyHandler?()
-        return noErr
-    }, 1, &eventType, nil, nil)
-    var ref: EventHotKeyRef?
-    let id = EventHotKeyID(signature: OSType(0x47504144), id: 1) // "GPAD"
-    let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), id, GetApplicationEventTarget(), 0, &ref)
-    NSLog("GitPad: hotkey register status=%d", status)
+    private static var handler: (() -> Void)?
+    private static var ref: EventHotKeyRef?
+    private static var installed = false
+    private static var currentCode = defaultKeyCode
+    private static var currentMods = defaultModifiers
+    private static let hotkeyID = EventHotKeyID(signature: OSType(0x47504144), id: 1) // "GPAD"
+
+    /// User-facing combo, e.g. "⌥Space" — read at render time; no observer needed.
+    static var display: String {
+        UserDefaults.standard.string(forKey: "hotkeyDisplay") ?? defaultDisplay
+    }
+
+    /// Install the shared handler once, then apply the stored (or default) binding.
+    static func start(_ onFire: @escaping () -> Void) {
+        handler = onFire
+        if !installed {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                     eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+                Hotkey.handler?(); return noErr
+            }, 1, &spec, nil, nil)
+            installed = true
+        }
+        let d = UserDefaults.standard
+        let code = (d.object(forKey: "hotkeyKeyCode") as? Int).map(UInt32.init) ?? defaultKeyCode
+        let mods = (d.object(forKey: "hotkeyModifiers") as? Int).map(UInt32.init) ?? defaultModifiers
+        _ = apply(keyCode: code, modifiers: mods)
+    }
+
+    /// Swap the binding. Returns false — and restores the previous binding — if the
+    /// combo is already taken (eventHotKeyExistsErr) or registration otherwise fails.
+    @discardableResult
+    static func apply(keyCode: UInt32, modifiers: UInt32) -> Bool {
+        if let old = ref { UnregisterEventHotKey(old); ref = nil } // free our own combo first
+        var newRef: EventHotKeyRef?
+        let status = RegisterEventHotKey(keyCode, modifiers, hotkeyID,
+                                         GetApplicationEventTarget(), 0, &newRef)
+        if status == noErr, let newRef {
+            ref = newRef; currentCode = keyCode; currentMods = modifiers
+            return true
+        }
+        NSLog("GitPad: hotkey register failed status=%d", status)
+        var restore: EventHotKeyRef?
+        if RegisterEventHotKey(currentCode, currentMods, hotkeyID,
+                               GetApplicationEventTarget(), 0, &restore) == noErr { ref = restore }
+        return false
+    }
+
+    // MARK: NSEvent → Carbon + display
+
+    static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
+        var m: UInt32 = 0
+        if flags.contains(.command) { m |= UInt32(cmdKey) }
+        if flags.contains(.option)  { m |= UInt32(optionKey) }
+        if flags.contains(.control) { m |= UInt32(controlKey) }
+        if flags.contains(.shift)   { m |= UInt32(shiftKey) }
+        return m
+    }
+
+    static func displayString(_ flags: NSEvent.ModifierFlags, keyCode: UInt16, chars: String) -> String {
+        var s = ""
+        if flags.contains(.control) { s += "⌃" }
+        if flags.contains(.option)  { s += "⌥" }
+        if flags.contains(.shift)   { s += "⇧" }
+        if flags.contains(.command) { s += "⌘" }
+        return s + keyName(keyCode, chars)
+    }
+
+    private static let specialKeys: [UInt16: String] = [
+        UInt16(kVK_Space): "Space", UInt16(kVK_Return): "↩", UInt16(kVK_Tab): "⇥",
+        UInt16(kVK_ANSI_KeypadEnter): "⌤",
+        UInt16(kVK_LeftArrow): "←", UInt16(kVK_RightArrow): "→",
+        UInt16(kVK_UpArrow): "↑", UInt16(kVK_DownArrow): "↓",
+        UInt16(kVK_Delete): "⌫", UInt16(kVK_ForwardDelete): "⌦",
+        UInt16(kVK_Home): "↖", UInt16(kVK_End): "↘",
+        UInt16(kVK_PageUp): "⇞", UInt16(kVK_PageDown): "⇟",
+    ]
+
+    private static func keyName(_ keyCode: UInt16, _ chars: String) -> String {
+        if let s = specialKeys[keyCode] { return s }
+        let up = chars.uppercased()
+        return up.isEmpty ? "Key\(keyCode)" : up
+    }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let store = NoteStore()
     var panel: PanelWindow!
     var statusItem: NSStatusItem!
+    var openItem: NSMenuItem!
+    var revealItem: NSMenuItem!         // anchor for inserting the dynamic recent-notes section
+    var recentItems: [NSMenuItem] = []  // dynamically rebuilt on each menu open
     var syncTimer: Timer?
     private var pillDragOrigin: NSRect?
     private var pillDragMouse: NSPoint?
@@ -41,6 +123,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editHolder.submenu = edit
+
+        // Note commands. The hidden main menu routes key equivalents even though
+        // an accessory app shows no menu bar — so these work from every screen,
+        // which the old zero-opacity SwiftUI buttons never did (capture only).
+        let noteHolder = NSMenuItem()
+        main.addItem(noteHolder)
+        let note = NSMenu(title: "Note")
+        note.autoenablesItems = false // no responder validates our @objc actions → force-enable
+        note.addItem(withTitle: "New Note", action: #selector(newNoteCmd), keyEquivalent: "n")
+        note.addItem(withTitle: "Library", action: #selector(toggleLibraryCmd), keyEquivalent: "l")
+        note.addItem(.separator())
+        note.addItem(withTitle: "Save", action: #selector(saveCmd), keyEquivalent: "s")
+        let del = note.addItem(withTitle: "Delete Note", action: #selector(deleteNoteCmd), keyEquivalent: "\u{8}")
+        del.keyEquivalentModifierMask = .command
+        note.addItem(.separator())
+        note.addItem(withTitle: "Minimize to Pill", action: #selector(minimizeCmd), keyEquivalent: "m")
+        note.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        note.items.forEach { $0.target = self }
+        noteHolder.submenu = note
+
         NSApp.mainMenu = main
 
         panel = PanelWindow(store: store)
@@ -48,16 +150,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "GitPad")
         let menu = NSMenu()
-        menu.addItem(withTitle: "Open  (⌥Space)", action: #selector(togglePanel), keyEquivalent: "")
+        openItem = menu.addItem(withTitle: "Open  (\(Hotkey.display))", action: #selector(togglePanel), keyEquivalent: "")
+        menu.addItem(withTitle: "Append Clipboard to Daily", action: #selector(appendClipboard), keyEquivalent: "")
         menu.addItem(withTitle: "Sync Now", action: #selector(syncNow), keyEquivalent: "")
         menu.addItem(withTitle: "Set Remote…", action: #selector(setRemote), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         menu.addItem(.separator())
+        // recent notes are inserted just above this item on each open (menuNeedsUpdate)
+        revealItem = menu.addItem(withTitle: "Reveal Notes in Finder", action: #selector(revealNotes), keyEquivalent: "")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit GitPad", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
+        menu.delegate = self // refresh the hotkey title + recent notes each time it opens
         statusItem.menu = menu
 
-        registerHotkey { [weak self] in self?.togglePanel() }
+        Hotkey.start { [weak self] in self?.togglePanel() }
 
         store.onSaved = { [weak self] in self?.backgroundSync() }
         store.onHide = { [weak self] in self?.panel.orderOut(nil) }
@@ -112,7 +219,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        openItem.title = "Open  (\(Hotkey.display))" // reflect a rebound hotkey
+        // rebuild the "Recent" section directly above "Reveal Notes in Finder"
+        recentItems.forEach(menu.removeItem)
+        recentItems.removeAll()
+        let anchor = menu.index(of: revealItem)
+        guard anchor >= 0 else { return }
+        let recents = Array(store.notes.prefix(5))
+        guard !recents.isEmpty else { return }
+        var at = anchor
+        let header = NSMenuItem(); header.title = "Recent"; header.isEnabled = false
+        menu.insertItem(header, at: at); recentItems.append(header); at += 1
+        for url in recents {
+            let it = NSMenuItem(title: store.title(for: url), action: #selector(openRecent(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = url
+            it.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+            menu.insertItem(it, at: at); recentItems.append(it); at += 1
+        }
+        let sep = NSMenuItem.separator()
+        menu.insertItem(sep, at: at); recentItems.append(sep)
+    }
+
+    /// Bring the panel to the front (expanding the pill first if collapsed).
+    private func showPanel() {
+        if store.pill { store.setPill?(false) }
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc func openRecent(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        store.open(url)
+        showPanel()
+    }
+
+    @objc func revealNotes() { NSWorkspace.shared.activateFileViewerSelecting([store.dir]) }
+
+    @objc func appendClipboard() {
+        guard let clip = NSPasteboard.general.string(forType: .string),
+              !clip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        store.selected = store.dailyNote()
+        store.screen = .capture
+        store.appendToDaily(clip)
+        showPanel()
+    }
+
+    // MARK: gitpad:// URL scheme (Raycast/Alfred/Shortcuts/scripts)
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard store.screen != .onboarding else { return } // don't hijack first-run
+        for url in urls where url.scheme == "gitpad" { handleURL(url) }
+    }
+
+    private func handleURL(_ url: URL) {
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+        switch url.host {
+        case "new":
+            store.newNote()
+            if let t = value("text"), !t.trimmingCharacters(in: .whitespaces).isEmpty { store.text = t }
+            store.screen = .capture
+            showPanel()
+        case "daily":
+            store.selected = store.dailyNote()
+            store.screen = .capture
+            if let append = value("append") { store.appendToDaily(append) }
+            showPanel()
+        default: break
+        }
+    }
+
     @objc func syncNow() { backgroundSync() }
+
+    @objc func newNoteCmd() { store.newNote() }
+    @objc func toggleLibraryCmd() { store.toggleLibrary() }
+    @objc func saveCmd() { store.saveNow() }
+    @objc func deleteNoteCmd() { store.deleteCurrent() }
+    @objc func minimizeCmd() { if !store.pill { store.setPill?(true) } }
 
     @objc func showSettings() {
         store.screen = .settings
@@ -122,12 +307,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func backgroundSync() {
         let dir = store.dir
+        store.syncing = true
         syncQueue.async { [weak self] in
             let hasRemote = GitSync.run(["remote", "get-url", "origin"], in: dir).status == 0
             let ok = GitSync.sync(dir: dir)
             DispatchQueue.main.async {
                 self?.statusItem.button?.contentTintColor = (ok || !hasRemote) ? nil : .systemOrange
                 self?.store.syncStatus = !hasRemote ? .noRemote : ok ? .synced(Date()) : .offline
+                self?.store.syncing = false
                 self?.store.refresh() // pick up files pulled from remote
             }
         }

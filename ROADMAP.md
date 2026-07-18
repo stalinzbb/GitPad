@@ -10,16 +10,16 @@ or it doesn't ship.
 - [x] **Theming v2** — appearance-driven themes (each flips the whole window light/dark so every control adapts), live swatch picker.
 - [x] **Navigation v2** — one NavBar on every screen; chevron.left always means back, xmark only on Capture, Esc mirrors the clicks.
 - [ ] Conflict-resolution UX polish (inline diff when comparing copies).
-- [ ] Keyboard-shortcut customization (⌥Space collides with some launchers).
+- [x] **Keyboard-shortcut customization** — the global hotkey is rebindable in Settings (Settings → Global Hotkey → record a combo), so ⌥Space collisions with Raycast/Alfred are fixable.
 
 ## Next — power, still lazy
 
 - [ ] Full-text search hotkey.
 - [ ] `[[note linking]]` + backlinks.
 - [ ] Note templates.
-- [ ] `gitpad://new?text=` URL scheme + Shortcuts.app integration.
-- [ ] Clipboard quick-capture.
-- [ ] Pinned notes.
+- [x] **`gitpad://` URL scheme** — `new?text=`, `daily`, `daily?append=`. Unlocks Raycast/Alfred/Shortcuts/scripts.
+- [x] **Clipboard quick-capture** — "Append Clipboard to Daily" in the status menu (and `gitpad://daily?append=`).
+- [x] **Pinned notes** — Pin/Unpin in a note's ⋯ menu; a "Pinned" group leads the library.
 
 ## Later — reach
 
@@ -33,5 +33,15 @@ or it doesn't ship.
 
 ## Non-goals
 
-Accounts. Servers. Telemetry. Databases. Electron. Subscriptions. If a feature
-needs any of these, it's not GitPad.
+Databases. Electron. Subscriptions. If a feature needs any of these, it's not GitPad.
+
+- **Accounts** — the app never requires one. The optional "email me on new releases"
+  field (see [GROWTH.md](GROWTH.md) §4) is a mailing-list subscription, not an account:
+  no password, no profile, no login, nothing the app depends on. Skip it and nothing changes.
+- **Servers** — you never run one and never sign into one. Sync is a git remote *you*
+  choose. The only server the app might ever touch is the opt-in analytics endpoint below.
+- **Non-consensual telemetry** — nothing is sent without an explicit yes. An opt-in,
+  off-by-default, fully inspectable anonymous ping *may* exist (see [GROWTH.md](GROWTH.md)
+  §3): ~4 events, no note content, no filenames, a random regenerable install id, and a
+  "See exactly what's sent" button showing the literal payload before you enable it. Off
+  by default means off — declining is the default and changes nothing.

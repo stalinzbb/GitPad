@@ -17,7 +17,7 @@ gotchas, and things that would surprise a contributor._
 - **Fresh-app indexing**: until copied to `/Applications`, Spotlight/automation don't know the app exists.
 - **Rebase vs merge**: `-X ours/theirs` swap meaning under rebase; sync uses plain merge deliberately to keep semantics predictable.
 - **SwiftUI `TextEditor`** is too limited for highlighting → wrapped `NSTextView` (`MarkdownTextView`).
-- **⌥Space** may collide with other launchers (Raycast/Alfred); hotkey is hardcoded for now (customization is on the roadmap).
+- **⌥Space** may collide with other launchers (Raycast/Alfred); it's now rebindable in Settings → Global Hotkey. The binding is swapped via Carbon `Unregister`/`Register` (see `Hotkey.apply`); the shared event handler is installed once so re-registering never double-fires. On collision (`eventHotKeyExistsErr`) the old binding is restored and the recorder shows "already in use".
 - **Ad-hoc signing** with Hardened Runtime — fine locally; distribution needs Developer ID + notarization.
 
 ## Verify
