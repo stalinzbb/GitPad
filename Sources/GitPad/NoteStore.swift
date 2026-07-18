@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 enum Screen { case onboarding, capture, library, settings, gitSetup }
 
@@ -25,12 +26,14 @@ final class NoteStore: ObservableObject {
     @Published var text = "" {
         didSet { if !loading { scheduleSave() } }
     }
-    @Published var compact = false
+    @Published var pill = false
     @Published var screen: Screen = .capture
 
     var onSaved: (() -> Void)?
     var onHide: (() -> Void)?
     var requestSync: (() -> Void)?
+    var setPill: ((Bool) -> Void)?
+    var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
     private var loading = false
     private var saveWork: DispatchWorkItem?

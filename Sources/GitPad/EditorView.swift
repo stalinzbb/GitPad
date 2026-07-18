@@ -5,27 +5,53 @@ import AppKit
 
 struct Theme: Identifiable {
     let id: String
-    let accent: NSColor   // checkboxes, chips, interactive tint
-    let code: NSColor     // inline code
-    let wash: Color?      // translucent tint over the material background
+    let appearance: NSAppearance.Name?  // nil = follow system; drives every native control
+    let accentSwift: Color              // tint for SwiftUI controls
+    let accent: NSColor                 // checkboxes, chips
+    let code: NSColor                   // inline code
+    let editorTint: Color?              // subtle tint layered over material (opacity ≤ 0.25)
+    let swatchBg: Color                 // opaque background for the settings swatch
 
     static let all: [Theme] = [
-        Theme(id: "System", accent: .controlAccentColor, code: .systemPurple, wash: nil),
-        Theme(id: "Sepia", accent: NSColor(red: 0.72, green: 0.53, blue: 0.29, alpha: 1),
+        Theme(id: "System", appearance: nil,
+              accentSwift: .accentColor, accent: .controlAccentColor, code: .systemPurple,
+              editorTint: nil, swatchBg: Color(nsColor: .windowBackgroundColor)),
+        Theme(id: "Sepia", appearance: .aqua,
+              accentSwift: Color(red: 0.66, green: 0.46, blue: 0.22),
+              accent: NSColor(red: 0.66, green: 0.46, blue: 0.22, alpha: 1),
               code: NSColor(red: 0.60, green: 0.42, blue: 0.20, alpha: 1),
-              wash: Color(red: 0.96, green: 0.91, blue: 0.81).opacity(0.35)),
-        Theme(id: "Nord", accent: NSColor(red: 0.53, green: 0.75, blue: 0.82, alpha: 1),
+              editorTint: Color(red: 0.96, green: 0.91, blue: 0.81).opacity(0.18),
+              swatchBg: Color(red: 0.96, green: 0.91, blue: 0.81)),
+        Theme(id: "Nord", appearance: .darkAqua,
+              accentSwift: Color(red: 0.53, green: 0.75, blue: 0.82),
+              accent: NSColor(red: 0.53, green: 0.75, blue: 0.82, alpha: 1),
               code: NSColor(red: 0.64, green: 0.75, blue: 0.55, alpha: 1),
-              wash: Color(red: 0.18, green: 0.20, blue: 0.25).opacity(0.5)),
-        Theme(id: "Dracula", accent: NSColor(red: 0.74, green: 0.58, blue: 0.98, alpha: 1),
+              editorTint: Color(red: 0.18, green: 0.20, blue: 0.25).opacity(0.22),
+              swatchBg: Color(red: 0.18, green: 0.20, blue: 0.25)),
+        Theme(id: "Dracula", appearance: .darkAqua,
+              accentSwift: Color(red: 0.74, green: 0.58, blue: 0.98),
+              accent: NSColor(red: 0.74, green: 0.58, blue: 0.98, alpha: 1),
               code: NSColor(red: 0.31, green: 0.90, blue: 0.48, alpha: 1),
-              wash: Color(red: 0.16, green: 0.16, blue: 0.21).opacity(0.55)),
-        Theme(id: "Solarized", accent: NSColor(red: 0.15, green: 0.55, blue: 0.82, alpha: 1),
+              editorTint: Color(red: 0.16, green: 0.16, blue: 0.21).opacity(0.22),
+              swatchBg: Color(red: 0.16, green: 0.16, blue: 0.21)),
+        Theme(id: "Solarized Light", appearance: .aqua,
+              accentSwift: Color(red: 0.15, green: 0.55, blue: 0.82),
+              accent: NSColor(red: 0.15, green: 0.55, blue: 0.82, alpha: 1),
               code: NSColor(red: 0.52, green: 0.60, blue: 0.00, alpha: 1),
-              wash: Color(red: 0.99, green: 0.96, blue: 0.89).opacity(0.30)),
+              editorTint: Color(red: 0.99, green: 0.96, blue: 0.89).opacity(0.16),
+              swatchBg: Color(red: 0.99, green: 0.96, blue: 0.89)),
     ]
 
     static func named(_ id: String) -> Theme { all.first { $0.id == id } ?? all[0] }
+}
+
+/// Ambient sync-state color, shared by every NavBar dot + the pill.
+func syncColor(_ status: SyncStatus) -> Color {
+    switch status {
+    case .synced: return .green
+    case .offline: return .orange
+    default: return .secondary.opacity(0.4)
+    }
 }
 
 // MARK: - Root switcher
@@ -34,42 +60,119 @@ struct EditorView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("theme") private var themeID = "System"
 
+    private var theme: Theme { Theme.named(themeID) }
+
     var body: some View {
         ZStack {
             GlassBackground()
-            if let wash = Theme.named(themeID).wash {
-                Rectangle().fill(wash).allowsHitTesting(false)
+            if let tint = theme.editorTint {
+                Rectangle().fill(tint).allowsHitTesting(false)
             }
             Group {
-                switch store.screen {
-                case .onboarding:
-                    OnboardingView(store: store)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                case .capture:
-                    CaptureView(store: store)
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .leading).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)))
-                case .library:
-                    LibraryView(store: store)
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .trailing).combined(with: .opacity)))
-                case .settings:
-                    SettingsView(store: store)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                case .gitSetup:
-                    GitSetupView(store: store)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                if store.pill {
+                    PillView(store: store)
+                } else {
+                    screens
                 }
             }
-            .animation(.spring(response: 0.32, dampingFraction: 0.85), value: store.screen)
         }
+        .tint(theme.accentSwift) // buttons/toggles/sliders/selection take the theme accent
         .overlay( // hairline edge; material below dims itself when the window loses key
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: store.pill ? 20 : 14, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
-        .frame(minWidth: 280, minHeight: 180)
+        .frame(minWidth: store.pill ? 0 : 280, minHeight: store.pill ? 0 : 180)
+        .onAppear { store.applyAppearance?(theme.appearance) }
+        .onChange(of: themeID) { _ in store.applyAppearance?(theme.appearance) }
+    }
+
+    @ViewBuilder private var screens: some View {
+        Group {
+            switch store.screen {
+            case .onboarding:
+                OnboardingView(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            case .capture:
+                CaptureView(store: store)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .leading).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)))
+            case .library:
+                LibraryView(store: store)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)))
+            case .settings:
+                SettingsView(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            case .gitSetup:
+                GitSetupView(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.85), value: store.screen)
+    }
+}
+
+// MARK: - Shared navigation chrome
+
+/// One header for every screen: [left] · [center title/context] · [right].
+/// chevron.left always means "back one level"; xmark only appears on Capture.
+struct NavBar<L: View, C: View, R: View>: View {
+    @ViewBuilder var left: () -> L
+    @ViewBuilder var center: () -> C
+    @ViewBuilder var right: () -> R
+
+    var body: some View {
+        ZStack {
+            center()
+            HStack { left(); Spacer(); right() }
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+    }
+}
+
+/// Center slot: title with the ambient sync dot in the subtitle line.
+struct NavCenter: View {
+    @ObservedObject var store: NoteStore
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(title).font(.footnote.weight(.medium)).lineLimit(1)
+            HStack(spacing: 4) {
+                Circle().fill(syncColor(store.syncStatus)).frame(width: 5, height: 5)
+                if let subtitle {
+                    Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
+        }
+        .frame(maxWidth: 200)
+        .allowsHitTesting(false)
+    }
+}
+
+/// Collapsed UI: a draggable lozenge showing sync dot + note title. Tap to expand.
+struct PillView: View {
+    @ObservedObject var store: NoteStore
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
+            Text(store.selected.map { store.title(for: $0) } ?? "GitPad")
+                .font(.footnote.weight(.medium)).lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { store.setPill?(false) }
+        .help("Expand (⌥Space)")
     }
 }
 
@@ -96,26 +199,19 @@ struct CaptureView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                // centered title + context, above the button rows
-                VStack(spacing: 1) {
-                    Text(store.selected.map { store.title(for: $0) } ?? "")
-                        .font(.footnote.weight(.medium)).lineLimit(1)
-                    if !store.compact, let sel = store.selected {
-                        Text(subtitle(for: sel))
-                            .font(.caption2).foregroundStyle(.tertiary)
-                    }
-                }
-                .frame(maxWidth: 180)
-                .allowsHitTesting(false)
+            NavBar {
+                Button { store.onHide?() } label: { Image(systemName: "xmark") }
+                    .help("Hide (Esc)")
+            } center: {
+                NavCenter(store: store,
+                          title: store.selected.map { store.title(for: $0) } ?? "",
+                          subtitle: store.selected.map { subtitle(for: $0) })
+            } right: {
                 HStack(spacing: 10) {
-                    Button { store.onHide?() } label: { Image(systemName: "xmark") }
-                        .help("Hide (Esc)")
-                    Circle()
-                        .fill(syncDot)
-                        .frame(width: 6, height: 6)
-                        .help(store.syncStatus.label)
-                    Spacer()
+                    Button { store.setPill?(true) } label: {
+                        Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    }
+                    .help("Minimize to pill")
                     Button { store.newNote() } label: { Image(systemName: "square.and.pencil") }
                         .help("New note (⌘N)")
                         .keyboardShortcut("n")
@@ -124,12 +220,9 @@ struct CaptureView: View {
                         .keyboardShortcut("l")
                 }
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
 
             MarkdownTextView(text: $store.text,
-                             fontSize: store.compact ? 12 : CGFloat(editorFontSize),
+                             fontSize: CGFloat(editorFontSize),
                              design: fontDesign,
                              themeID: themeID)
         }
@@ -145,14 +238,6 @@ struct CaptureView: View {
         let date = store.modified(sel).formatted(.dateTime.month(.abbreviated).day())
         if let f = store.folder(of: sel) { return "\(f) · \(date)" }
         return date
-    }
-
-    private var syncDot: Color {
-        switch store.syncStatus {
-        case .synced: return .green
-        case .offline: return .orange
-        default: return .secondary.opacity(0.4)
-        }
     }
 }
 
@@ -184,17 +269,12 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                Text("Settings").font(.headline)
-                HStack {
-                    Button { store.screen = .library } label: {
-                        Image(systemName: "chevron.left").foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-            }
-            .buttonStyle(.borderless)
-            .padding(12)
+            NavBar {
+                Button { store.screen = .library } label: { Image(systemName: "chevron.left") }
+                    .help("Back (Esc)")
+            } center: {
+                NavCenter(store: store, title: "Settings")
+            } right: { EmptyView() }
 
             Form {
                 Section("Editor") {
@@ -231,7 +311,7 @@ struct SettingsView: View {
                     }
                     LabeledContent("Status") {
                         HStack(spacing: 6) {
-                            Circle().fill(statusColor).frame(width: 7, height: 7)
+                            Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
                             Text(store.syncStatus.label)
                             if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
                                 Text("↑\(ab.ahead) ↓\(ab.behind)").foregroundStyle(.tertiary)
@@ -262,23 +342,32 @@ struct SettingsView: View {
                     }
                 }
                 Section("Appearance") {
-                    Picker("Theme", selection: $themeID) {
-                        ForEach(Theme.all) { Text($0.id).tag($0.id) }
+                    HStack(spacing: 12) {
+                        ForEach(Theme.all) { t in
+                            Button { themeID = t.id } label: {
+                                Circle().fill(t.swatchBg)
+                                    .frame(width: 26, height: 26)
+                                    .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
+                                    .overlay(themeID == t.id
+                                        ? Image(systemName: "checkmark")
+                                            .font(.system(size: 8, weight: .bold))
+                                            .foregroundStyle(.white)
+                                        : nil)
+                                    .overlay(Circle().strokeBorder(
+                                        Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
+                                        lineWidth: themeID == t.id ? 2 : 1))
+                            }
+                            .buttonStyle(.plain)
+                            .help(t.id)
+                        }
                     }
+                    .padding(.vertical, 2)
                 }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
         }
         .onAppear { refreshGitInfo() }
-    }
-
-    private var statusColor: Color {
-        switch store.syncStatus {
-        case .synced: return .green
-        case .offline: return .orange
-        default: return .secondary
-        }
     }
 
     private func saveRemote() {
@@ -327,23 +416,25 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            NavBar {
+                Button { store.screen = .capture } label: { Image(systemName: "chevron.left") }
+                    .help("Back to note (⌘L / Esc)")
+                    .keyboardShortcut("l")
+            } center: {
+                NavCenter(store: store, title: "Library")
+            } right: {
+                Button { store.screen = .settings } label: { Image(systemName: "gearshape") }
+                    .help("Settings")
+            }
+
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search notes…", text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit { if let first = filtered.first { store.open(first) } }
-                Button { store.screen = .settings } label: {
-                    Image(systemName: "gearshape").foregroundStyle(.secondary)
-                }
-                Button { store.screen = .capture } label: {
-                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                }
-                .help("Back to note (⌘L)")
-                .keyboardShortcut("l")
             }
-            .buttonStyle(.borderless)
-            .padding(12)
+            .padding(.horizontal, 12).padding(.bottom, 8)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -470,6 +561,8 @@ struct NoteRow: View {
             .fixedSize()
             .opacity(hovering ? 1 : 0)
         }
+        .padding(.vertical, 2).padding(.horizontal, 6)
+        .background(Color.primary.opacity(hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onTapGesture { store.open(url) }
         .onHover { hovering = $0 }

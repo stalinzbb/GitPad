@@ -40,15 +40,21 @@ final class PanelWindow: NSPanel {
         }
     }
 
-    func applyCompact(_ compact: Bool) {
-        var frame = self.frame
-        if compact {
-            let screen = NSScreen.main?.visibleFrame ?? .zero
-            frame = NSRect(x: screen.maxX - 320, y: screen.maxY - 240, width: 300, height: 220)
+    private var expandedFrame: NSRect?
+
+    /// Collapse to a 240×40 lozenge (saving the expanded frame) or restore it.
+    func applyPill(_ pill: Bool) {
+        if pill {
+            expandedFrame = frame
+            let f = NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40)
+            contentView?.layer?.cornerRadius = 20 // → height/2
+            setFrame(f, display: true, animate: true)
+            orderFront(nil) // floats, but doesn't steal focus
         } else {
-            frame = NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560)
+            let f = expandedFrame ?? NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560)
+            contentView?.layer?.cornerRadius = 14
+            setFrame(f, display: true, animate: true)
+            makeKeyAndOrderFront(nil)
         }
-        setFrame(frame, display: true, animate: true)
-        if compact { orderFront(nil) } else { makeKeyAndOrderFront(nil) }
     }
 }

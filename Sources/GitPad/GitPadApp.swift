@@ -47,7 +47,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "GitPad")
         let menu = NSMenu()
         menu.addItem(withTitle: "Open  (⌥Space)", action: #selector(togglePanel), keyEquivalent: "")
-        menu.addItem(withTitle: "Compact Mode", action: #selector(toggleCompact), keyEquivalent: "")
         menu.addItem(withTitle: "Sync Now", action: #selector(syncNow), keyEquivalent: "")
         menu.addItem(withTitle: "Set Remote…", action: #selector(setRemote), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
@@ -61,6 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onSaved = { [weak self] in self?.backgroundSync() }
         store.onHide = { [weak self] in self?.panel.orderOut(nil) }
         store.requestSync = { [weak self] in self?.backgroundSync() }
+        store.setPill = { [weak self] on in
+            self?.store.pill = on
+            self?.panel.applyPill(on)
+        }
+        store.applyAppearance = { [weak self] name in
+            self?.panel.appearance = name.flatMap { NSAppearance(named: $0) }
+        }
         syncTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.backgroundSync() }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
@@ -79,6 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func togglePanel() {
+        if store.pill {                  // pill visible → spring back to the full panel
+            store.setPill?(false)
+            return
+        }
         if panel.isKeyWindow {
             panel.orderOut(nil)
         } else {
@@ -89,11 +99,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
-    }
-
-    @objc func toggleCompact() {
-        store.compact.toggle()
-        panel.applyCompact(store.compact)
     }
 
     @objc func syncNow() { backgroundSync() }
@@ -122,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = "Git remote URL"
         alert.informativeText = "SSH URL of your private notes repo, e.g. git@github.com:you/notes.git"
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
-        field.stringValue = GitSync.run(["remote", "get-url", "origin"], in: store.dir).out
+        field.stringValue = GitSync.remoteURL(in: store.dir)
         alert.accessoryView = field
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")

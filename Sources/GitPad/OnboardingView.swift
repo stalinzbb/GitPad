@@ -101,28 +101,37 @@ struct OnboardingView: View {
 struct GitSetupView: View {
     @ObservedObject var store: NoteStore
     @State private var remote = ""
-    @State private var testResult: String?
+    @State private var result: String?
+    @State private var working = false
+    @State private var ghReady = false
+
+    private var trimmed: String { remote.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                Text("Set up sync").font(.headline)
-                HStack {
-                    Button { store.screen = .settings } label: {
-                        Image(systemName: "chevron.left").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    Spacer()
-                }
-            }
-            .padding(12)
+            NavBar {
+                Button { store.screen = .settings } label: { Image(systemName: "chevron.left") }
+                    .help("Back (Esc)")
+            } center: {
+                NavCenter(store: store, title: "Set up sync")
+            } right: { EmptyView() }
 
             VStack(alignment: .leading, spacing: 18) {
                 step(1, "Create a private repository",
-                     "Any git host works. On GitHub: New repository → Private → no README needed.")
-                Link("Open github.com/new ↗", destination: URL(string: "https://github.com/new")!)
-                    .font(.callout)
+                     "Any git host works. On GitHub: New repository → Private.")
+                if ghReady {
+                    Button {
+                        createRepo()
+                    } label: {
+                        Label("Create a private repo for me", systemImage: "wand.and.stars")
+                    }
                     .padding(.leading, 30)
+                    .disabled(working)
+                } else {
+                    Link("Open github.com/new ↗", destination: URL(string: "https://github.com/new")!)
+                        .font(.callout)
+                        .padding(.leading, 30)
+                }
 
                 step(2, "Paste its SSH URL",
                      "Uses the SSH keys already on this Mac — nothing to log into.")
@@ -130,34 +139,30 @@ struct GitSetupView: View {
                     .textFieldStyle(.roundedBorder)
                     .padding(.leading, 30)
 
-                step(3, "Test & turn on",
+                step(3, "Save & Sync",
                      "GitPad then syncs on every save, every 5 minutes, and on wake.")
-                HStack(spacing: 10) {
-                    Button("Test connection") { test() }
-                        .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
-                    if let r = testResult {
-                        Text(r).font(.caption)
-                            .foregroundStyle(r.hasPrefix("✓") ? Color.green : r == "…" ? Color.secondary : Color.red)
-                    }
-                }
-                .padding(.leading, 30)
             }
             .padding(20)
             Spacer()
-            Button("Save & Sync") {
-                GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
-                store.requestSync?()
-                store.screen = .settings
+            if let r = result {
+                Text(r).font(.caption)
+                    .foregroundStyle(r.hasPrefix("✓") ? Color.green : Color.red)
+                    .padding(.bottom, 6)
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
-            .padding(.bottom, 20)
+            Button(working ? "Working…" : "Save & Sync") { saveAndSync() }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(trimmed.isEmpty || working)
+                .padding(.bottom, 20)
         }
         .onAppear {
             DispatchQueue.global().async {
                 let url = GitSync.remoteURL(in: store.dir)
-                DispatchQueue.main.async { if remote.isEmpty { remote = url } }
+                let gh = GitSync.ghReady()
+                DispatchQueue.main.async {
+                    if remote.isEmpty { remote = url }
+                    ghReady = gh
+                }
             }
         }
     }
@@ -175,13 +180,37 @@ struct GitSetupView: View {
         }
     }
 
-    private func test() {
-        let url = remote.trimmingCharacters(in: .whitespacesAndNewlines)
-        testResult = "…"
+    /// Save remote → reachability check → sync, reporting one friendly line.
+    private func saveAndSync() {
+        let url = trimmed
+        working = true
+        result = nil
         DispatchQueue.global().async {
-            let r = GitSync.run(["ls-remote", url], in: store.dir)
+            GitSync.setRemote(url, in: store.dir)
+            let ls = GitSync.run(["ls-remote", url], in: store.dir)
+            if ls.status != 0 {
+                let msg = GitSync.friendlyError(ls.out)
+                DispatchQueue.main.async { result = "✗ " + msg; working = false }
+                return
+            }
+            let ok = GitSync.sync(dir: store.dir)
             DispatchQueue.main.async {
-                testResult = r.status == 0 ? "✓ Connected" : "✗ Can't reach — check URL & SSH key"
+                result = ok ? "✓ Synced — you're all set" : "✗ Sync failed — try again"
+                working = false
+                store.refresh()
+            }
+        }
+    }
+
+    private func createRepo() {
+        working = true
+        result = nil
+        DispatchQueue.global().async {
+            let url = GitSync.ghCreateRepo("gitpad-notes")
+            DispatchQueue.main.async {
+                working = false
+                if let url { remote = url; saveAndSync() }
+                else { result = "✗ Couldn't create the repo — paste an SSH URL instead" }
             }
         }
     }

@@ -7,5 +7,5 @@ rm -rf GitPad.app
 mkdir -p GitPad.app/Contents/MacOS
 cp .build/release/GitPad GitPad.app/Contents/MacOS/
 cp Info.plist GitPad.app/Contents/
-codesign --force --sign - GitPad.app
+codesign --force --options runtime --sign - GitPad.app
 echo "Built $(pwd)/GitPad.app"

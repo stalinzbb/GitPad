@@ -42,3 +42,26 @@ grep -q eggs "$B"/*conflict*.md || { echo "FAIL: A's edit not preserved in copy"
 "$BIN" --sync "$A"
 grep -q eggs "$A"/*conflict*.md || { echo "FAIL: conflict copy not propagated to A"; exit 1; }
 echo "PASS: conflict resolved silently, both edits preserved"
+
+# Scenario 2: remote already has a README (unrelated history) — a fresh local
+# repo must merge it in, not fail forever on "unrelated histories".
+R2="$TMP/remote2.git"; C="$TMP/c"; SEED="$TMP/seed"
+git init --bare -q -b main "$R2"
+git clone -q "$R2" "$SEED"
+echo "# Notes repo" > "$SEED/README.md"
+git -C "$SEED" -c user.name=S -c user.email=s@x add -A
+git -C "$SEED" -c user.name=S -c user.email=s@x commit -qm readme
+git -C "$SEED" push -q origin main
+
+mkdir "$C"
+echo "# Ideas
+- ship it" > "$C/ideas.md"
+git -C "$C" init -q -b main
+git -C "$C" config user.name C; git -C "$C" config user.email c@x
+git -C "$C" remote add origin "$R2"
+"$BIN" --sync "$C"
+
+[ -z "$(git -C "$C" status --porcelain)" ] || { echo "FAIL: C repo dirty after unrelated-histories sync"; exit 1; }
+[ -f "$C/README.md" ] || { echo "FAIL: remote README not merged in"; exit 1; }
+[ -f "$C/ideas.md" ] || { echo "FAIL: local note lost"; exit 1; }
+echo "PASS: unrelated-histories remote merged cleanly"
