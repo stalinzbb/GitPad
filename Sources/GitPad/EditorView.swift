@@ -1,14 +1,45 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Themes (token set consumed by the editor + chrome)
+
+struct Theme: Identifiable {
+    let id: String
+    let accent: NSColor   // checkboxes, chips, interactive tint
+    let code: NSColor     // inline code
+    let wash: Color?      // translucent tint over the material background
+
+    static let all: [Theme] = [
+        Theme(id: "System", accent: .controlAccentColor, code: .systemPurple, wash: nil),
+        Theme(id: "Sepia", accent: NSColor(red: 0.72, green: 0.53, blue: 0.29, alpha: 1),
+              code: NSColor(red: 0.60, green: 0.42, blue: 0.20, alpha: 1),
+              wash: Color(red: 0.96, green: 0.91, blue: 0.81).opacity(0.35)),
+        Theme(id: "Nord", accent: NSColor(red: 0.53, green: 0.75, blue: 0.82, alpha: 1),
+              code: NSColor(red: 0.64, green: 0.75, blue: 0.55, alpha: 1),
+              wash: Color(red: 0.18, green: 0.20, blue: 0.25).opacity(0.5)),
+        Theme(id: "Dracula", accent: NSColor(red: 0.74, green: 0.58, blue: 0.98, alpha: 1),
+              code: NSColor(red: 0.31, green: 0.90, blue: 0.48, alpha: 1),
+              wash: Color(red: 0.16, green: 0.16, blue: 0.21).opacity(0.55)),
+        Theme(id: "Solarized", accent: NSColor(red: 0.15, green: 0.55, blue: 0.82, alpha: 1),
+              code: NSColor(red: 0.52, green: 0.60, blue: 0.00, alpha: 1),
+              wash: Color(red: 0.99, green: 0.96, blue: 0.89).opacity(0.30)),
+    ]
+
+    static func named(_ id: String) -> Theme { all.first { $0.id == id } ?? all[0] }
+}
+
 // MARK: - Root switcher
 
 struct EditorView: View {
     @ObservedObject var store: NoteStore
+    @AppStorage("theme") private var themeID = "System"
 
     var body: some View {
         ZStack {
             GlassBackground()
+            if let wash = Theme.named(themeID).wash {
+                Rectangle().fill(wash).allowsHitTesting(false)
+            }
             Group {
                 switch store.screen {
                 case .onboarding:
@@ -26,6 +57,9 @@ struct EditorView: View {
                             removal: .move(edge: .trailing).combined(with: .opacity)))
                 case .settings:
                     SettingsView(store: store)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                case .gitSetup:
+                    GitSetupView(store: store)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
             }
@@ -58,38 +92,67 @@ struct CaptureView: View {
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
 
+    @AppStorage("theme") private var themeID = "System"
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Button { store.onHide?() } label: { Image(systemName: "xmark") }
-                    .help("Hide (Esc)")
-                Text(store.selected.map { store.title(for: $0) } ?? "")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
-                if !store.compact, let sel = store.selected {
-                    Text(store.modified(sel), format: .dateTime.month(.abbreviated).day())
-                        .font(.caption2).foregroundStyle(.tertiary)
+            ZStack {
+                // centered title + context, above the button rows
+                VStack(spacing: 1) {
+                    Text(store.selected.map { store.title(for: $0) } ?? "")
+                        .font(.footnote.weight(.medium)).lineLimit(1)
+                    if !store.compact, let sel = store.selected {
+                        Text(subtitle(for: sel))
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
                 }
-                Button { store.newNote() } label: { Image(systemName: "square.and.pencil") }
-                    .help("New note (⌘N)")
-                    .keyboardShortcut("n")
-                Button { store.screen = .library } label: { Image(systemName: "square.grid.2x2") }
-                    .help("Library (⌘L)")
-                    .keyboardShortcut("l")
+                .frame(maxWidth: 180)
+                .allowsHitTesting(false)
+                HStack(spacing: 10) {
+                    Button { store.onHide?() } label: { Image(systemName: "xmark") }
+                        .help("Hide (Esc)")
+                    Circle()
+                        .fill(syncDot)
+                        .frame(width: 6, height: 6)
+                        .help(store.syncStatus.label)
+                    Spacer()
+                    Button { store.newNote() } label: { Image(systemName: "square.and.pencil") }
+                        .help("New note (⌘N)")
+                        .keyboardShortcut("n")
+                    Button { store.screen = .library } label: { Image(systemName: "square.grid.2x2") }
+                        .help("Library (⌘L)")
+                        .keyboardShortcut("l")
+                }
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
 
             MarkdownTextView(text: $store.text,
                              fontSize: store.compact ? 12 : CGFloat(editorFontSize),
-                             design: fontDesign)
+                             design: fontDesign,
+                             themeID: themeID)
         }
-        .background(
+        .background(Group {
             Button("") { store.deleteCurrent() }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .opacity(0)
-        )
+            Button("") { store.saveNow() } // saveNow fires onSaved → git commit & push
+                .keyboardShortcut("s")
+        }.opacity(0))
+    }
+
+    private func subtitle(for sel: URL) -> String {
+        let date = store.modified(sel).formatted(.dateTime.month(.abbreviated).day())
+        if let f = store.folder(of: sel) { return "\(f) · \(date)" }
+        return date
+    }
+
+    private var syncDot: Color {
+        switch store.syncStatus {
+        case .synced: return .green
+        case .offline: return .orange
+        default: return .secondary.opacity(0.4)
+        }
     }
 }
 
@@ -99,6 +162,7 @@ struct SettingsView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
+    @AppStorage("theme") private var themeID = "System"
     @State private var remote = ""
     @State private var aheadBehind: (ahead: Int, behind: Int)?
 
@@ -119,14 +183,16 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            ZStack {
                 Text("Settings").font(.headline)
-                Spacer()
-                Button { store.screen = .capture } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                HStack {
+                    Button { store.screen = .library } label: {
+                        Image(systemName: "chevron.left").foregroundStyle(.secondary)
+                    }
+                    Spacer()
                 }
-                .buttonStyle(.borderless)
             }
+            .buttonStyle(.borderless)
             .padding(12)
 
             Form {
@@ -147,6 +213,11 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("Sync") {
+                    Button {
+                        store.screen = .gitSetup
+                    } label: {
+                        Label("Set up sync — step-by-step guide", systemImage: "sparkles")
+                    }
                     HStack {
                         TextField("git@github.com:you/notes.git", text: $remote)
                             .textFieldStyle(.roundedBorder)
@@ -187,12 +258,9 @@ struct SettingsView: View {
                     }
                 }
                 Section("Appearance") {
-                    Picker("Theme", selection: .constant("system")) {
-                        Text("System").tag("system")
+                    Picker("Theme", selection: $themeID) {
+                        ForEach(Theme.all) { Text($0.id).tag($0.id) }
                     }
-                    .disabled(true)
-                    Text("More themes are on the roadmap.")
-                        .font(.caption).foregroundStyle(.tertiary)
                 }
             }
             .formStyle(.grouped)
@@ -265,8 +333,9 @@ struct LibraryView: View {
                     Image(systemName: "gearshape").foregroundStyle(.secondary)
                 }
                 Button { store.screen = .capture } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
                 }
+                .help("Back to note (⌘L)")
                 .keyboardShortcut("l")
             }
             .buttonStyle(.borderless)
@@ -388,6 +457,7 @@ struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
     var fontSize: CGFloat = 14
     var design: String = "system"
+    var themeID: String = "System"
 
     func makeNSView(context: Context) -> NSScrollView {
         // TextKit 1 stack so our layout manager can draw full-width dividers
@@ -424,9 +494,11 @@ struct MarkdownTextView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? SmartTextView, let storage = tv.textStorage else { return }
         context.coordinator.parent = self
-        if context.coordinator.fontSize != fontSize || context.coordinator.design != design {
+        if context.coordinator.fontSize != fontSize || context.coordinator.design != design
+            || context.coordinator.themeID != themeID {
             context.coordinator.fontSize = fontSize
             context.coordinator.design = design
+            context.coordinator.themeID = themeID
             tv.font = Coordinator.baseFont(fontSize, design)
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
@@ -443,6 +515,7 @@ struct MarkdownTextView: NSViewRepresentable {
         weak var textView: SmartTextView?
         var fontSize: CGFloat = 14
         var design: String = "system"
+        var themeID: String = "System"
         private var slashLocation: Int?
         private let actionPopover = NSPopover()
 
@@ -490,13 +563,16 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
-        private var cachedRules: (size: CGFloat, design: String,
+        private var cachedRules: (size: CGFloat, design: String, theme: String,
                                   base: [NSAttributedString.Key: Any],
                                   rules: [(NSRegularExpression, [NSAttributedString.Key: Any])])?
 
         private func rules() -> (base: [NSAttributedString.Key: Any],
                                  rules: [(NSRegularExpression, [NSAttributedString.Key: Any])]) {
-            if let c = cachedRules, c.size == fontSize, c.design == design { return (c.base, c.rules) }
+            if let c = cachedRules, c.size == fontSize, c.design == design, c.theme == themeID {
+                return (c.base, c.rules)
+            }
+            let theme = Theme.named(themeID)
             func re(_ p: String) -> NSRegularExpression {
                 try! NSRegularExpression(pattern: p, options: [.anchorsMatchLines])
             }
@@ -511,16 +587,16 @@ struct MarkdownTextView: NSViewRepresentable {
                 (re(#"(?<!\*)\*[^*\n]+\*(?!\*)"#), [.obliqueness: 0.15]),
                 (re(#"~~[^~\n]+~~"#), [.strikethroughStyle: NSUnderlineStyle.single.rawValue]),
                 (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular),
-                                     .foregroundColor: NSColor.systemPurple]),
+                                     .foregroundColor: theme.code]),
                 (re(#"^\s*(?:[-*+] |\d+\. )"#), [.foregroundColor: NSColor.secondaryLabelColor]),
-                (re(#"^\s*[☐☑]"#), [.foregroundColor: NSColor.controlAccentColor,
+                (re(#"^\s*[☐☑]"#), [.foregroundColor: theme.accent,
                                     .font: NSFont.systemFont(ofSize: fontSize + 1)]),
                 (re(#"^\s*☑ .*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
                                      .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
                 // dashes hidden; DividerLayoutManager draws a full-width rule instead
                 (re(#"^\s*[-—]{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
             ]
-            cachedRules = (fontSize, design, base, list)
+            cachedRules = (fontSize, design, themeID, base, list)
             return (base, list)
         }
 
@@ -628,18 +704,19 @@ struct MarkdownTextView: NSViewRepresentable {
 
         @objc private func showActions() {
             guard let tv = textView, tv.selectedRange().length > 0,
-                  NSEvent.pressedMouseButtons == 0, let win = tv.window else { return }
+                  NSEvent.pressedMouseButtons == 0,
+                  let lm = tv.layoutManager, let tc = tv.textContainer else { return }
             if actionPopover.contentViewController == nil {
                 actionPopover.contentViewController = NSHostingController(rootView: ActionBar(coordinator: self))
                 actionPopover.behavior = .transient
             }
-            // anchor tightly to the selection's first line so the bar sits next to the text
-            var sel = tv.selectedRange()
-            let screenRect = tv.firstRect(forCharacterRange: sel, actualRange: &sel)
-            var local = tv.convert(win.convertFromScreen(screenRect), from: nil)
-            local = local.insetBy(dx: 0, dy: -2)
-            guard local.width > 0 || local.height > 0 else { return }
-            actionPopover.show(relativeTo: local, of: tv, preferredEdge: .maxY)
+            // pure view-space geometry — screen-space conversion put the bar far from the text
+            let gr = lm.glyphRange(forCharacterRange: tv.selectedRange(), actualCharacterRange: nil)
+            var rect = lm.boundingRect(forGlyphRange: gr, in: tc)
+            rect.origin.x += tv.textContainerOrigin.x
+            rect.origin.y += tv.textContainerOrigin.y
+            guard rect.width > 0, rect.height > 0 else { return }
+            actionPopover.show(relativeTo: rect, of: tv, preferredEdge: .maxY)
         }
 
         func wrap(_ mark: String) {

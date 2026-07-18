@@ -96,3 +96,93 @@ struct OnboardingView: View {
         store.screen = .capture
     }
 }
+
+/// Step-by-step git sync onboarding, reachable any time from Settings.
+struct GitSetupView: View {
+    @ObservedObject var store: NoteStore
+    @State private var remote = ""
+    @State private var testResult: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Text("Set up sync").font(.headline)
+                HStack {
+                    Button { store.screen = .settings } label: {
+                        Image(systemName: "chevron.left").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                }
+            }
+            .padding(12)
+
+            VStack(alignment: .leading, spacing: 18) {
+                step(1, "Create a private repository",
+                     "Any git host works. On GitHub: New repository → Private → no README needed.")
+                Link("Open github.com/new ↗", destination: URL(string: "https://github.com/new")!)
+                    .font(.callout)
+                    .padding(.leading, 30)
+
+                step(2, "Paste its SSH URL",
+                     "Uses the SSH keys already on this Mac — nothing to log into.")
+                TextField("git@github.com:you/notes.git", text: $remote)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.leading, 30)
+
+                step(3, "Test & turn on",
+                     "GitPad then syncs on every save, every 5 minutes, and on wake.")
+                HStack(spacing: 10) {
+                    Button("Test connection") { test() }
+                        .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if let r = testResult {
+                        Text(r).font(.caption)
+                            .foregroundStyle(r.hasPrefix("✓") ? Color.green : r == "…" ? Color.secondary : Color.red)
+                    }
+                }
+                .padding(.leading, 30)
+            }
+            .padding(20)
+            Spacer()
+            Button("Save & Sync") {
+                GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
+                store.requestSync?()
+                store.screen = .settings
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+            .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
+            .padding(.bottom, 20)
+        }
+        .onAppear {
+            DispatchQueue.global().async {
+                let url = GitSync.remoteURL(in: store.dir)
+                DispatchQueue.main.async { if remote.isEmpty { remote = url } }
+            }
+        }
+    }
+
+    private func step(_ n: Int, _ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(n)")
+                .font(.caption.weight(.bold))
+                .frame(width: 20, height: 20)
+                .background(Color.accentColor.opacity(0.15), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.medium))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func test() {
+        let url = remote.trimmingCharacters(in: .whitespacesAndNewlines)
+        testResult = "…"
+        DispatchQueue.global().async {
+            let r = GitSync.run(["ls-remote", url], in: store.dir)
+            DispatchQueue.main.async {
+                testResult = r.status == 0 ? "✓ Connected" : "✗ Can't reach — check URL & SSH key"
+            }
+        }
+    }
+}

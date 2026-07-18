@@ -1,6 +1,6 @@
 import Foundation
 
-enum Screen { case onboarding, capture, library, settings }
+enum Screen { case onboarding, capture, library, settings, gitSetup }
 
 enum SyncStatus: Equatable {
     case unknown, noRemote, synced(Date), offline

@@ -30,12 +30,13 @@ final class PanelWindow: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
-    // Esc steps back: library/settings → capture, then hide
+    // Esc steps back through the hierarchy: gitSetup → settings → library → capture → hide
     override func cancelOperation(_ sender: Any?) {
-        if store.screen == .library || store.screen == .settings {
-            store.screen = .capture
-        } else {
-            orderOut(nil)
+        switch store.screen {
+        case .gitSetup: store.screen = .settings
+        case .settings: store.screen = .library
+        case .library: store.screen = .capture
+        default: orderOut(nil)
         }
     }
 
