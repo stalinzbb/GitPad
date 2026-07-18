@@ -7,7 +7,7 @@ final class PanelWindow: NSPanel {
     init(store: NoteStore) {
         self.store = store
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 560),
             styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel, .resizable],
             backing: .buffered, defer: false)
         titleVisibility = .hidden
@@ -22,15 +22,20 @@ final class PanelWindow: NSPanel {
         [.closeButton, .miniaturizeButton, .zoomButton].forEach {
             standardWindowButton($0)?.isHidden = true
         }
-        contentView = NSHostingView(rootView: EditorView(store: store))
+        let host = NSHostingView(rootView: EditorView(store: store))
+        host.wantsLayer = true
+        host.layer?.cornerRadius = 14
+        host.layer?.cornerCurve = .continuous
+        host.layer?.masksToBounds = true
+        contentView = host
         center()
     }
 
     override var canBecomeKey: Bool { true }
 
-    // Esc steps back: library → capture, then hide
+    // Esc steps back: library/settings → capture, then hide
     override func cancelOperation(_ sender: Any?) {
-        if store.screen == .library {
+        if store.screen == .library || store.screen == .settings {
             store.screen = .capture
         } else {
             orderOut(nil)
@@ -43,7 +48,7 @@ final class PanelWindow: NSPanel {
             let screen = NSScreen.main?.visibleFrame ?? .zero
             frame = NSRect(x: screen.maxX - 320, y: screen.maxY - 240, width: 300, height: 220)
         } else {
-            frame = NSRect(x: frame.midX - 340, y: frame.midY - 210, width: 680, height: 420)
+            frame = NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560)
         }
         setFrame(frame, display: true, animate: true)
         if compact { orderFront(nil) } else { makeKeyAndOrderFront(nil) }

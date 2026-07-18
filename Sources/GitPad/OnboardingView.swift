@@ -12,8 +12,9 @@ struct OnboardingView: View {
         ("text.badge.checkmark", "Just type",
          "It saves itself. Type / for commands,\n⌘N for a new note, ⌘L for your library."),
         ("arrow.triangle.branch", "Sync with git",
-         "Optional. Point GitPad at a private repo\nand your notes follow you everywhere."),
+         "Optional. Create a private repo (github.com/new),\npaste its SSH URL, and your notes follow you everywhere.\nUses your existing SSH keys — nothing to log into."),
     ]
+    @State private var testResult: String?
 
     var body: some View {
         VStack(spacing: 14) {
@@ -26,10 +27,19 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             if step == 2 {
-                TextField("git@github.com:you/notes.git", text: $remote)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 280)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                HStack(spacing: 6) {
+                    TextField("git@github.com:you/notes.git", text: $remote)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                    Button("Test") { testConnection() }
+                        .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                if let result = testResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("✓") ? Color.green : result == "…" ? Color.secondary : Color.red)
+                }
             }
             Spacer()
             HStack(spacing: 6) {
@@ -65,6 +75,18 @@ struct OnboardingView: View {
         .id(step)
         .transition(.scale(scale: 0.6).combined(with: .opacity))
         .frame(height: 60)
+    }
+
+    private func testConnection() {
+        let url = remote.trimmingCharacters(in: .whitespacesAndNewlines)
+        testResult = "…"
+        DispatchQueue.global().async {
+            let r = GitSync.run(["ls-remote", url], in: store.dir)
+            DispatchQueue.main.async {
+                testResult = r.status == 0 ? "✓ Connected"
+                    : "✗ Can't reach the repo — check the URL and your SSH key"
+            }
+        }
     }
 
     private func finish() {

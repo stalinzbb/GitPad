@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Compact Mode", action: #selector(toggleCompact), keyEquivalent: "")
         menu.addItem(withTitle: "Sync Now", action: #selector(syncNow), keyEquivalent: "")
         menu.addItem(withTitle: "Set Remote…", action: #selector(setRemote), keyEquivalent: "")
+        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit GitPad", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
@@ -42,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerHotkey { [weak self] in self?.togglePanel() }
 
         store.onSaved = { [weak self] in self?.backgroundSync() }
+        store.onHide = { [weak self] in self?.panel.orderOut(nil) }
         syncTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.backgroundSync() }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
@@ -78,6 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func syncNow() { backgroundSync() }
+
+    @objc func showSettings() {
+        store.screen = .settings
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
     func backgroundSync() {
         let dir = store.dir

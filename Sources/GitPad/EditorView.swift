@@ -8,7 +8,7 @@ struct EditorView: View {
 
     var body: some View {
         ZStack {
-            VisualEffect()
+            GlassBackground()
             Group {
                 switch store.screen {
                 case .onboarding:
@@ -24,6 +24,9 @@ struct EditorView: View {
                         .transition(.asymmetric(
                             insertion: .move(edge: .trailing).combined(with: .opacity),
                             removal: .move(edge: .trailing).combined(with: .opacity)))
+                case .settings:
+                    SettingsView(store: store)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
             }
             .animation(.spring(response: 0.32, dampingFraction: 0.85), value: store.screen)
@@ -32,25 +35,33 @@ struct EditorView: View {
     }
 }
 
-struct VisualEffect: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
+/// Liquid glass on macOS 26+, vibrancy fallback below.
+struct GlassBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        if #available(macOS 26.0, *) {
+            return NSGlassEffectView()
+        }
         let v = NSVisualEffectView()
         v.material = .popover
         v.blendingMode = .behindWindow
         v.state = .active
         return v
     }
-    func updateNSView(_ v: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ v: NSView, context: Context) {}
 }
 
 // MARK: - Capture (just the editor)
 
 struct CaptureView: View {
     @ObservedObject var store: NoteStore
+    @AppStorage("fontDesign") private var fontDesign = "system"
+    @AppStorage("editorFontSize") private var editorFontSize = 14.0
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
+                Button { store.onHide?() } label: { Image(systemName: "xmark") }
+                    .help("Hide (Esc)")
                 Text(store.selected.map { store.title(for: $0) } ?? "")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
@@ -69,7 +80,9 @@ struct CaptureView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
 
-            MarkdownTextView(text: $store.text, fontSize: store.compact ? 12 : 14)
+            MarkdownTextView(text: $store.text,
+                             fontSize: store.compact ? 12 : CGFloat(editorFontSize),
+                             design: fontDesign)
         }
         .background(
             Button("") { store.deleteCurrent() }
@@ -79,17 +92,67 @@ struct CaptureView: View {
     }
 }
 
+// MARK: - Settings
+
+struct SettingsView: View {
+    @ObservedObject var store: NoteStore
+    @AppStorage("fontDesign") private var fontDesign = "system"
+    @AppStorage("editorFontSize") private var editorFontSize = 14.0
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Settings").font(.title3.weight(.semibold)).padding(.top, 18)
+            Form {
+                Picker("Font", selection: $fontDesign) {
+                    Text("System").tag("system")
+                    Text("Serif").tag("serif")
+                    Text("Rounded").tag("rounded")
+                    Text("Mono").tag("mono")
+                }
+                .pickerStyle(.segmented)
+                HStack {
+                    Slider(value: $editorFontSize, in: 11...20, step: 1) { Text("Size") }
+                    Text("\(Int(editorFontSize)) pt").font(.caption).foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+            .frame(maxWidth: 320)
+            Text("Aa — The quick brown fox")
+                .font(previewFont)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Done") { store.screen = .capture }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .padding(.bottom, 20)
+        }
+        .padding(.horizontal)
+    }
+
+    private var previewFont: Font {
+        let d: Font.Design = fontDesign == "serif" ? .serif
+            : fontDesign == "rounded" ? .rounded
+            : fontDesign == "mono" ? .monospaced : .default
+        return .system(size: CGFloat(editorFontSize), design: d)
+    }
+}
+
 // MARK: - Library (full-panel switcher)
 
 struct LibraryView: View {
     @ObservedObject var store: NoteStore
     @State private var query = ""
+    @State private var folder: String? = nil   // nil = All
     @FocusState private var searchFocused: Bool
+
+    private var filtered: [URL] {
+        store.matches(query).filter { folder == nil || store.folder(of: $0) == folder }
+    }
 
     private var groups: [(String, [URL])] {
         let cal = Calendar.current
         let weekAgo = Date().addingTimeInterval(-7 * 86400)
-        let m = store.matches(query)
+        let m = filtered
         return [
             ("Today", m.filter { cal.isDateInToday(store.modified($0)) }),
             ("This Week", m.filter { !cal.isDateInToday(store.modified($0)) && store.modified($0) > weekAgo }),
@@ -104,30 +167,37 @@ struct LibraryView: View {
                 TextField("Search notes…", text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
-                    .onSubmit { if let first = store.matches(query).first { store.open(first) } }
+                    .onSubmit { if let first = filtered.first { store.open(first) } }
+                Button { store.screen = .settings } label: {
+                    Image(systemName: "gearshape").foregroundStyle(.secondary)
+                }
                 Button { store.screen = .capture } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderless)
                 .keyboardShortcut("l")
             }
+            .buttonStyle(.borderless)
             .padding(12)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    chip("All", nil)
+                    ForEach(store.folders, id: \.self) { chip($0, $0) }
+                    Button { promptNewFolder() } label: {
+                        Image(systemName: "folder.badge.plus").font(.caption)
+                    }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+                    .help("New folder")
+                }
+                .padding(.horizontal, 12).padding(.bottom, 8)
+            }
             Divider().opacity(0.4)
+
             List {
                 ForEach(groups, id: \.0) { name, urls in
                     Section {
                         ForEach(urls, id: \.self) { url in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(store.title(for: url)).lineLimit(1)
-                                    Text(store.modified(url), format: .relative(presentation: .named))
-                                        .font(.caption2).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture { store.open(url) }
-                            .contextMenu { Button("Delete") { store.delete(url) } }
+                            NoteRow(store: store, url: url)
                         }
                     } header: {
                         Text(name).font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
@@ -139,27 +209,105 @@ struct LibraryView: View {
         }
         .onAppear { searchFocused = true }
     }
+
+    @ViewBuilder private func chip(_ label: String, _ value: String?) -> some View {
+        Button {
+            folder = value
+        } label: {
+            Text(label)
+                .font(.caption)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(folder == value ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1),
+                            in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func promptNewFolder() {
+        let alert = NSAlert()
+        alert.messageText = "New folder"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            store.createFolder(field.stringValue)
+        }
+    }
+}
+
+struct NoteRow: View {
+    @ObservedObject var store: NoteStore
+    let url: URL
+    @State private var hovering = false
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.title(for: url)).lineLimit(1)
+                HStack(spacing: 4) {
+                    if let f = store.folder(of: url) {
+                        Text(f).font(.caption2).foregroundStyle(.tertiary)
+                        Text("·").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    Text(store.modified(url), format: .relative(presentation: .named))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Menu {
+                Button("Open") { store.open(url) }
+                Menu("Move to") {
+                    Button("Notes") { store.move(url, to: nil) }
+                    ForEach(store.folders, id: \.self) { f in
+                        Button(f) { store.move(url, to: f) }
+                    }
+                }
+                Divider()
+                Button("Delete", role: .destructive) { store.delete(url) }
+            } label: {
+                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .opacity(hovering ? 1 : 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { store.open(url) }
+        .onHover { hovering = $0 }
+    }
 }
 
 // MARK: - Smart markdown editor
 
+private let dividerKey = NSAttributedString.Key("gitpadDivider")
+
 struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
     var fontSize: CGFloat = 14
+    var design: String = "system"
 
     func makeNSView(context: Context) -> NSScrollView {
-        let tv = SmartTextView()
+        // TextKit 1 stack so our layout manager can draw full-width dividers
+        let storage = NSTextStorage()
+        let layout = DividerLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+
+        let tv = SmartTextView(frame: .zero, textContainer: container)
         tv.isRichText = false
         tv.allowsUndo = true
-        tv.font = .systemFont(ofSize: fontSize)
+        tv.font = Coordinator.baseFont(fontSize, design)
         tv.textContainerInset = NSSize(width: 12, height: 8)
         tv.drawsBackground = false
         tv.isVerticallyResizable = true
         tv.autoresizingMask = [.width]
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.textContainer?.widthTracksTextView = true
         tv.delegate = context.coordinator
-        tv.textStorage?.delegate = context.coordinator
+        storage.delegate = context.coordinator
         context.coordinator.textView = tv
 
         let scroll = NSScrollView()
@@ -172,9 +320,10 @@ struct MarkdownTextView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? SmartTextView, let storage = tv.textStorage else { return }
         context.coordinator.parent = self
-        if context.coordinator.fontSize != fontSize {
+        if context.coordinator.fontSize != fontSize || context.coordinator.design != design {
             context.coordinator.fontSize = fontSize
-            tv.font = .systemFont(ofSize: fontSize)
+            context.coordinator.design = design
+            tv.font = Coordinator.baseFont(fontSize, design)
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
         if tv.string != text {
@@ -189,10 +338,28 @@ struct MarkdownTextView: NSViewRepresentable {
         var parent: MarkdownTextView
         weak var textView: SmartTextView?
         var fontSize: CGFloat = 14
+        var design: String = "system"
         private var slashLocation: Int?
         private let actionPopover = NSPopover()
 
-        init(_ parent: MarkdownTextView) { self.parent = parent }
+        init(_ parent: MarkdownTextView) {
+            self.parent = parent
+            self.fontSize = parent.fontSize
+            self.design = parent.design
+        }
+
+        // MARK: fonts
+        static func baseFont(_ size: CGFloat, _ design: String) -> NSFont {
+            let d: NSFontDescriptor.SystemDesign = design == "serif" ? .serif
+                : design == "rounded" ? .rounded
+                : design == "mono" ? .monospaced : .default
+            let desc = NSFont.systemFont(ofSize: size).fontDescriptor.withDesign(d)
+            return desc.flatMap { NSFont(descriptor: $0, size: size) } ?? .systemFont(ofSize: size)
+        }
+
+        private static func bold(_ f: NSFont) -> NSFont {
+            NSFont(descriptor: f.fontDescriptor.withSymbolicTraits(.bold), size: f.pointSize) ?? f
+        }
 
         // MARK: text change → binding + slash menu
         func textDidChange(_ notification: Notification) {
@@ -201,12 +368,12 @@ struct MarkdownTextView: NSViewRepresentable {
             maybeShowSlashMenu(tv)
         }
 
-        // MARK: paragraph-scoped highlighting (full pass only on load)
+        // MARK: paragraph-scoped highlighting
         func textStorage(_ storage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                          range editedRange: NSRange, changeInLength delta: Int) {
             guard editedMask.contains(.editedCharacters) else { return }
-            let safe = NSRange(location: min(editedRange.location, storage.length),
-                               length: min(editedRange.length, storage.length - min(editedRange.location, storage.length)))
+            let loc = min(editedRange.location, storage.length)
+            let safe = NSRange(location: loc, length: min(editedRange.length, storage.length - loc))
             let para = (storage.string as NSString).paragraphRange(for: safe)
             DispatchQueue.main.async { [weak self, weak storage] in
                 guard let self, let storage else { return }
@@ -214,35 +381,43 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
-        private var cachedRules: (size: CGFloat,
+        private var cachedRules: (size: CGFloat, design: String,
                                   base: [NSAttributedString.Key: Any],
                                   rules: [(NSRegularExpression, [NSAttributedString.Key: Any])])?
 
-        private func rules(_ size: CGFloat) -> (base: [NSAttributedString.Key: Any],
-                                                rules: [(NSRegularExpression, [NSAttributedString.Key: Any])]) {
-            if let c = cachedRules, c.size == size { return (c.base, c.rules) }
+        private func rules() -> (base: [NSAttributedString.Key: Any],
+                                 rules: [(NSRegularExpression, [NSAttributedString.Key: Any])]) {
+            if let c = cachedRules, c.size == fontSize, c.design == design { return (c.base, c.rules) }
             func re(_ p: String) -> NSRegularExpression {
                 try! NSRegularExpression(pattern: p, options: [.anchorsMatchLines])
             }
-            let base: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: size), .foregroundColor: NSColor.labelColor]
+            let f = Self.baseFont(fontSize, design)
+            let base: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.labelColor]
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
-                (re(#"^#{1,3} .*$"#), [.font: NSFont.boldSystemFont(ofSize: size + 3)]),
-                (re(#"\*\*[^*\n]+\*\*"#), [.font: NSFont.boldSystemFont(ofSize: size)]),
+                (re(#"^#{1,3} .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 4, design))]),
+                // fade the hash marks so headers read as rendered titles
+                (re(#"^#{1,3}(?= )"#), [.foregroundColor: NSColor.tertiaryLabelColor,
+                                        .font: NSFont.systemFont(ofSize: fontSize - 3, weight: .light)]),
+                (re(#"\*\*[^*\n]+\*\*"#), [.font: Self.bold(f)]),
                 (re(#"(?<!\*)\*[^*\n]+\*(?!\*)"#), [.obliqueness: 0.15]),
-                (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(ofSize: size - 1, weight: .regular),
+                (re(#"~~[^~\n]+~~"#), [.strikethroughStyle: NSUnderlineStyle.single.rawValue]),
+                (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular),
                                      .foregroundColor: NSColor.systemPurple]),
-                (re(#"^\s*(?:[-*+](?: \[[ x]\])? |\d+\. )"#), [.foregroundColor: NSColor.secondaryLabelColor]),
-                (re(#"^\s*[-*+] \[x\] .*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
-                                               .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
+                (re(#"^\s*(?:[-*+] |\d+\. )"#), [.foregroundColor: NSColor.secondaryLabelColor]),
+                (re(#"^\s*[☐☑]"#), [.foregroundColor: NSColor.controlAccentColor,
+                                    .font: NSFont.systemFont(ofSize: fontSize + 1)]),
+                (re(#"^\s*☑ .*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
+                                     .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
+                // dashes hidden; DividerLayoutManager draws a full-width rule instead
+                (re(#"^-{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
             ]
-            cachedRules = (size, base, list)
+            cachedRules = (fontSize, design, base, list)
             return (base, list)
         }
 
         func highlight(_ storage: NSTextStorage, range: NSRange) {
             guard range.location + range.length <= storage.length else { return }
-            let (base, list) = rules(fontSize)
+            let (base, list) = rules()
             storage.beginEditing()
             storage.setAttributes(base, range: range)
             for (regex, attrs) in list {
@@ -260,7 +435,7 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         private static let listRegex = try! NSRegularExpression(
-            pattern: #"^(\s*)(?:([-*+]) (\[[ x]\] )?|(\d+)\. )(.*)$"#)
+            pattern: #"^(\s*)(?:([-*+☐☑]) |(\d+)\. )(.*)$"#)
 
         private func continueList(_ tv: NSTextView) -> Bool {
             let ns = tv.string as NSString
@@ -270,24 +445,23 @@ struct MarkdownTextView: NSViewRepresentable {
             let lineNS = upToCaret as NSString
             guard let m = Self.listRegex.firstMatch(in: upToCaret,
                     range: NSRange(location: 0, length: lineNS.length)) else { return false }
-            let content = lineNS.substring(with: m.range(at: 5))
+            let content = lineNS.substring(with: m.range(at: 4))
             if content.isEmpty {
-                // Return on an empty list item ends the list
                 tv.insertText("", replacementRange: NSRange(location: lineR.location, length: caret - lineR.location))
                 return true
             }
             var prefix = lineNS.substring(with: m.range(at: 1))
-            if m.range(at: 4).location != NSNotFound, let n = Int(lineNS.substring(with: m.range(at: 4))) {
+            if m.range(at: 3).location != NSNotFound, let n = Int(lineNS.substring(with: m.range(at: 3))) {
                 prefix += "\(n + 1). "
             } else {
-                prefix += lineNS.substring(with: m.range(at: 2)) + " "
-                if m.range(at: 3).location != NSNotFound { prefix += "[ ] " }
+                let marker = lineNS.substring(with: m.range(at: 2))
+                prefix += (marker == "☐" || marker == "☑") ? "☐ " : marker + " "
             }
             tv.insertText("\n" + prefix, replacementRange: tv.selectedRange())
             return true
         }
 
-        // MARK: slash commands (native NSMenu at the caret — free keyboard nav + type-select)
+        // MARK: slash commands
         private func maybeShowSlashMenu(_ tv: NSTextView) {
             let caret = tv.selectedRange().location
             let ns = tv.string as NSString
@@ -304,7 +478,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 ("Title", "textformat.size", "# "),
                 ("Subtitle", "textformat", "## "),
                 ("Bullet List", "list.bullet", "- "),
-                ("To-do", "checklist", "- [ ] "),
+                ("To-do", "checklist", "☐ "),
                 ("Numbered List", "list.number", "1. "),
                 ("Date", "calendar", now.formatted(date: .abbreviated, time: .omitted) + " "),
                 ("Time", "clock", now.formatted(date: .omitted, time: .shortened) + " "),
@@ -340,7 +514,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 return
             }
             NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(showActions), object: nil)
-            perform(#selector(showActions), with: nil, afterDelay: 0.3)
+            perform(#selector(showActions), with: nil, afterDelay: 0.25)
         }
 
         @objc private func showActions() {
@@ -350,8 +524,11 @@ struct MarkdownTextView: NSViewRepresentable {
                 actionPopover.contentViewController = NSHostingController(rootView: ActionBar(coordinator: self))
                 actionPopover.behavior = .transient
             }
-            let screenRect = tv.firstRect(forCharacterRange: tv.selectedRange(), actualRange: nil)
-            let local = tv.convert(win.convertFromScreen(screenRect), from: nil)
+            // anchor tightly to the selection's first line so the bar sits next to the text
+            var sel = tv.selectedRange()
+            let screenRect = tv.firstRect(forCharacterRange: sel, actualRange: &sel)
+            var local = tv.convert(win.convertFromScreen(screenRect), from: nil)
+            local = local.insetBy(dx: 0, dy: -2)
             guard local.width > 0 || local.height > 0 else { return }
             actionPopover.show(relativeTo: local, of: tv, preferredEdge: .maxY)
         }
@@ -370,7 +547,7 @@ struct MarkdownTextView: NSViewRepresentable {
             let para = ns.paragraphRange(for: tv.selectedRange())
             let lines = ns.substring(with: para)
                 .components(separatedBy: "\n")
-                .map { $0.isEmpty || $0.hasPrefix("- [ ] ") ? $0 : "- [ ] " + $0 }
+                .map { $0.isEmpty || $0.hasPrefix("☐ ") ? $0 : "☐ " + $0 }
                 .joined(separator: "\n")
             tv.insertText(lines, replacementRange: para)
             actionPopover.performClose(nil)
@@ -381,20 +558,46 @@ struct MarkdownTextView: NSViewRepresentable {
 struct ActionBar: View {
     let coordinator: MarkdownTextView.Coordinator
     var body: some View {
-        HStack(spacing: 2) {
-            Button { coordinator.wrap("**") } label: { Image(systemName: "bold") }
-            Button { coordinator.wrap("*") } label: { Image(systemName: "italic") }
-            Button { coordinator.wrap("`") } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
-            Button { coordinator.makeTodo() } label: { Image(systemName: "checklist") }
+        HStack(spacing: 12) {
+            action("bold") { coordinator.wrap("**") }
+            action("italic") { coordinator.wrap("*") }
+            action("strikethrough") { coordinator.wrap("~~") }
+            action("chevron.left.forwardslash.chevron.right") { coordinator.wrap("`") }
+            action("checklist") { coordinator.makeTodo() }
         }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 8).padding(.vertical, 5)
+        .padding(.horizontal, 12).padding(.vertical, 7)
+    }
+
+    private func action(_ symbol: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) { Image(systemName: symbol).frame(width: 18, height: 16) }
+            .buttonStyle(.borderless)
     }
 }
 
-/// NSTextView that toggles `- [ ]` / `- [x]` on click.
+/// Draws a full-width rule for `---` lines (their text is set to clear).
+final class DividerLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard let storage = textStorage, let container = textContainers.first else { return }
+        let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        storage.enumerateAttribute(dividerKey, in: charRange) { value, range, _ in
+            guard value != nil else { return }
+            let gr = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let rect = boundingRect(forGlyphRange: gr, in: container)
+            let y = rect.midY + origin.y
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: origin.x + 2, y: y))
+            path.line(to: NSPoint(x: origin.x + container.size.width - 4, y: y))
+            path.lineWidth = 1
+            NSColor.separatorColor.setStroke()
+            path.stroke()
+        }
+    }
+}
+
+/// NSTextView that toggles ☐/☑ on click.
 final class SmartTextView: NSTextView {
-    private static let checkboxRegex = try! NSRegularExpression(pattern: #"^\s*[-*+] \[([ x])\] "#)
+    private static let checkboxRegex = try! NSRegularExpression(pattern: #"^(\s*)([☐☑]) "#)
 
     override func mouseDown(with event: NSEvent) {
         let ns = string as NSString
@@ -405,9 +608,9 @@ final class SmartTextView: NSTextView {
             let line = ns.substring(with: lineR)
             if let m = Self.checkboxRegex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)),
                idx >= lineR.location, idx < lineR.location + m.range.length {
-                let boxR = NSRange(location: lineR.location + m.range(at: 1).location, length: 1)
-                let checked = ns.substring(with: boxR) == "x"
-                insertText(checked ? " " : "x", replacementRange: boxR)
+                let boxR = NSRange(location: lineR.location + m.range(at: 2).location, length: 1)
+                let checked = ns.substring(with: boxR) == "☑"
+                insertText(checked ? "☐" : "☑", replacementRange: boxR)
                 return
             }
         }

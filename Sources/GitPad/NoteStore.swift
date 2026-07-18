@@ -1,12 +1,13 @@
 import Foundation
 
-enum Screen { case onboarding, capture, library }
+enum Screen { case onboarding, capture, library, settings }
 
 final class NoteStore: ObservableObject {
     let dir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Documents/GitPad")
 
     @Published var notes: [URL] = []
+    @Published var folders: [String] = []
     @Published var selected: URL? { didSet { loadSelected() } }
     @Published var text = "" {
         didSet { if !loading { scheduleSave() } }
@@ -15,9 +16,11 @@ final class NoteStore: ObservableObject {
     @Published var screen: Screen = .capture
 
     var onSaved: (() -> Void)?
+    var onHide: (() -> Void)?
     private var loading = false
     private var saveWork: DispatchWorkItem?
     private var titleCache: [URL: (title: String, mtime: Date)] = [:]
+    private var lastNew = Date.distantPast
 
     init() {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -27,18 +30,60 @@ final class NoteStore: ObservableObject {
     }
 
     func refresh() {
-        let urls = ((try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-            .filter { $0.pathExtension == "md" }
-        notes = urls.sorted { modified($0) > modified($1) }
-        if let sel = selected, !notes.contains(sel) { selected = notes.first }
+        let fm = FileManager.default
+        var found: [URL] = []
+        var dirs: [String] = []
+        for item in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
+            if (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                guard item.lastPathComponent != ".git" else { continue }
+                dirs.append(item.lastPathComponent)
+                found += ((try? fm.contentsOfDirectory(at: item, includingPropertiesForKeys: nil)) ?? [])
+                    .filter { $0.pathExtension == "md" }
+            } else if item.pathExtension == "md" {
+                found.append(item)
+            }
+        }
+        folders = dirs.sorted()
+        notes = found.sorted { modified($0) > modified($1) }
+        if let sel = selected, !notes.contains(where: { $0.path == sel.path }) { selected = notes.first }
     }
 
-    /// One note per day; ⌥Space always lands here.
+    // MARK: folders
+
+    func folder(of url: URL) -> String? {
+        let parent = url.deletingLastPathComponent()
+        return parent.path == dir.path ? nil : parent.lastPathComponent
+    }
+
+    func createFolder(_ name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "-")
+        guard !clean.isEmpty else { return }
+        try? FileManager.default.createDirectory(at: dir.appendingPathComponent(clean),
+                                                 withIntermediateDirectories: true)
+        refresh()
+    }
+
+    func move(_ url: URL, to folder: String?) {
+        let dest = (folder.map { dir.appendingPathComponent($0) } ?? dir)
+            .appendingPathComponent(url.lastPathComponent)
+        guard dest.path != url.path else { return }
+        try? FileManager.default.moveItem(at: url, to: dest)
+        titleCache[url] = nil
+        let wasSelected = selected?.path == url.path
+        refresh()
+        if wasSelected { selected = dest }
+    }
+
+    // MARK: notes
+
+    /// One note per day, kept in Daily/; ⌥Space always lands here.
     func dailyNote() -> URL {
+        let daily = dir.appendingPathComponent("Daily")
+        try? FileManager.default.createDirectory(at: daily, withIntermediateDirectories: true)
         let name = DateFormatter()
         name.dateFormat = "yyyy-MM-dd"
-        let url = dir.appendingPathComponent(name.string(from: Date()) + ".md")
+        let url = daily.appendingPathComponent(name.string(from: Date()) + ".md")
         if !FileManager.default.fileExists(atPath: url.path) {
             let header = DateFormatter()
             header.dateFormat = "EEE, MMM d"
@@ -50,6 +95,14 @@ final class NoteStore: ObservableObject {
 
     @discardableResult
     func newNote() -> URL {
+        // debounce: reuse a still-empty scratch note or ignore rapid presses
+        if let sel = selected, sel.lastPathComponent.hasPrefix("note-"),
+           text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            screen = .capture
+            return sel
+        }
+        if Date().timeIntervalSince(lastNew) < 0.7, let sel = selected { return sel }
+        lastNew = Date()
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         let url = dir.appendingPathComponent("note-\(stamp).md")
@@ -100,9 +153,22 @@ final class NoteStore: ObservableObject {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
+    // MARK: load/save — files keep standard markdown; the editor shows ☐/☑ glyphs
+
+    static func fromMarkdown(_ s: String) -> String {
+        s.replacingOccurrences(of: #"(?m)^(\s*)- \[ \] "#, with: "$1☐ ", options: .regularExpression)
+         .replacingOccurrences(of: #"(?m)^(\s*)- \[x\] "#, with: "$1☑ ", options: .regularExpression)
+    }
+
+    static func toMarkdown(_ s: String) -> String {
+        s.replacingOccurrences(of: #"(?m)^(\s*)☐ "#, with: "$1- [ ] ", options: .regularExpression)
+         .replacingOccurrences(of: #"(?m)^(\s*)☑ "#, with: "$1- [x] ", options: .regularExpression)
+    }
+
     private func loadSelected() {
         loading = true
-        text = selected.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        let raw = selected.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        text = Self.fromMarkdown(raw)
         loading = false
     }
 
@@ -115,7 +181,7 @@ final class NoteStore: ObservableObject {
 
     func saveNow() {
         guard let url = selected else { return }
-        try? text.write(to: url, atomically: true, encoding: .utf8)
+        try? Self.toMarkdown(text).write(to: url, atomically: true, encoding: .utf8)
         onSaved?()
     }
 }
