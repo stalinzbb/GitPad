@@ -54,17 +54,21 @@ enum GitSync {
     /// Turn raw git stderr into one friendly line — never shown verbatim.
     static func friendlyError(_ stderr: String) -> String {
         let s = stderr.lowercased()
+        if s.contains("terminal prompts disabled") || s.contains("could not read username")
+            || s.contains("authentication failed") {
+            return "This HTTPS URL needs a login — use the SSH URL (git@…), or install & sign in to the gh CLI"
+        }
         if s.contains("permission denied") || s.contains("publickey") {
-            return "SSH key not authorized for this repo"
+            return "SSH key not authorized — add this Mac's key to the repo host"
         }
         if s.contains("host key verification") {
-            return "Host unknown — connect once in Terminal to trust it"
+            return "Host unknown — run `ssh -T git@github.com` once in Terminal to trust it"
         }
         if s.contains("could not read from remote") || s.contains("not found")
             || s.contains("does not exist") || s.contains("repository") {
-            return "Repository URL not found — check the address"
+            return "Repository not found — double-check the URL"
         }
-        return "Can't reach the repo — check the URL and your SSH key"
+        return "Can't reach the repo — check the URL and your network"
     }
 
     // MARK: gh CLI (optional convenience)
@@ -80,12 +84,21 @@ enum GitSync {
         return exec(gh, ["auth", "status"]).status == 0
     }
 
-    /// Create a private repo and return its SSH URL, or nil on any failure.
+    /// Configure git to push over HTTPS using gh's stored token (no SSH needed).
+    static func enableHTTPSAuth() {
+        guard let gh = ghPath else { return }
+        _ = exec(gh, ["auth", "setup-git"])
+    }
+
+    /// Create a private repo and return an HTTPS URL that pushes via gh's token
+    /// (works without any SSH setup), or nil on failure.
     static func ghCreateRepo(_ name: String) -> String? {
         guard let gh = ghPath else { return nil }
         guard exec(gh, ["repo", "create", name, "--private"]).status == 0 else { return nil }
-        let u = exec(gh, ["repo", "view", name, "--json", "sshUrl", "-q", ".sshUrl"])
-        return u.status == 0 && !u.out.isEmpty ? u.out : nil
+        enableHTTPSAuth()
+        let u = exec(gh, ["repo", "view", name, "--json", "url", "-q", ".url"])
+        guard u.status == 0, !u.out.isEmpty else { return nil }
+        return u.out.hasSuffix(".git") ? u.out : u.out + ".git"
     }
 
     /// Commit local edits, reconcile with origin, push. Never surfaces a merge UI:

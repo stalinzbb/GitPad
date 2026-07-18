@@ -134,6 +134,37 @@ struct NavBar<L: View, C: View, R: View>: View {
     }
 }
 
+/// Standard header: a screen-specific left slot + the persistent right cluster
+/// (Settings · Minimize · Close) available on every screen.
+struct ChromeBar<L: View>: View {
+    @ObservedObject var store: NoteStore
+    let title: String
+    var subtitle: String? = nil
+    var showSettings: Bool = true
+    @ViewBuilder var left: () -> L
+
+    var body: some View {
+        NavBar {
+            left()
+        } center: {
+            NavCenter(store: store, title: title, subtitle: subtitle)
+        } right: {
+            HStack(spacing: 10) {
+                if showSettings {
+                    Button { store.openSettings() } label: { Image(systemName: "gearshape") }
+                        .help("Settings (⌘,)")
+                }
+                Button { store.setPill?(true) } label: {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                }
+                .help("Minimize to pill")
+                Button { store.onHide?() } label: { Image(systemName: "xmark") }
+                    .help("Close (Esc)")
+            }
+        }
+    }
+}
+
 /// Center slot: title with the ambient sync dot in the subtitle line.
 struct NavCenter: View {
     @ObservedObject var store: NoteStore
@@ -155,7 +186,8 @@ struct NavCenter: View {
     }
 }
 
-/// Collapsed UI: a draggable lozenge showing sync dot + note title. Tap to expand.
+/// Collapsed UI: a draggable lozenge. Drag the body to move it (the window is
+/// movable-by-background); click the expand button — or press ⌥Space — to restore.
 struct PillView: View {
     @ObservedObject var store: NoteStore
 
@@ -165,14 +197,17 @@ struct PillView: View {
             Text(store.selected.map { store.title(for: $0) } ?? "GitPad")
                 .font(.footnote.weight(.medium)).lineLimit(1)
             Spacer(minLength: 0)
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.caption2).foregroundStyle(.tertiary)
+            // A real Button reliably receives the click even with
+            // isMovableByWindowBackground on (an onTapGesture gets eaten by the drag).
+            Button { store.setPill?(false) } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Expand (⌥Space)")
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .onTapGesture { store.setPill?(false) }
-        .help("Expand (⌥Space)")
     }
 }
 
@@ -199,25 +234,16 @@ struct CaptureView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NavBar {
-                Button { store.onHide?() } label: { Image(systemName: "xmark") }
-                    .help("Hide (Esc)")
-            } center: {
-                NavCenter(store: store,
-                          title: store.selected.map { store.title(for: $0) } ?? "",
-                          subtitle: store.selected.map { subtitle(for: $0) })
-            } right: {
+            ChromeBar(store: store,
+                      title: store.selected.map { store.title(for: $0) } ?? "",
+                      subtitle: store.selected.map { subtitle(for: $0) }) {
                 HStack(spacing: 10) {
-                    Button { store.setPill?(true) } label: {
-                        Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    }
-                    .help("Minimize to pill")
-                    Button { store.newNote() } label: { Image(systemName: "square.and.pencil") }
-                        .help("New note (⌘N)")
-                        .keyboardShortcut("n")
                     Button { store.screen = .library } label: { Image(systemName: "square.grid.2x2") }
                         .help("Library (⌘L)")
                         .keyboardShortcut("l")
+                    Button { store.newNote() } label: { Image(systemName: "square.and.pencil") }
+                        .help("New note (⌘N)")
+                        .keyboardShortcut("n")
                 }
             }
 
@@ -231,6 +257,8 @@ struct CaptureView: View {
                 .keyboardShortcut(.delete, modifiers: .command)
             Button("") { store.saveNow() } // saveNow fires onSaved → git commit & push
                 .keyboardShortcut("s")
+            Button("") { store.openSettings() }
+                .keyboardShortcut(",")
         }.opacity(0))
     }
 
@@ -269,12 +297,10 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NavBar {
-                Button { store.screen = .library } label: { Image(systemName: "chevron.left") }
+            ChromeBar(store: store, title: "Settings", showSettings: false) {
+                Button { store.goBack() } label: { Image(systemName: "chevron.left") }
                     .help("Back (Esc)")
-            } center: {
-                NavCenter(store: store, title: "Settings")
-            } right: { EmptyView() }
+            }
 
             Form {
                 Section("Editor") {
@@ -388,25 +414,53 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Library (full-panel switcher)
+// MARK: - Library (two-column: sources on the left, notes on the right)
+
+enum LibrarySource: Hashable {
+    case daily, recent, folder(String)
+
+    var label: String {
+        switch self {
+        case .daily: return "Daily"
+        case .recent: return "Recent"
+        case .folder(let f): return f
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .daily: return "calendar"
+        case .recent: return "clock"
+        case .folder: return "folder"
+        }
+    }
+}
 
 struct LibraryView: View {
     @ObservedObject var store: NoteStore
     @State private var query = ""
-    @State private var folder: String? = nil   // nil = All
+    @State private var source: LibrarySource = .recent
     @State private var creatingFolder = false
     @State private var newFolderName = ""
     @FocusState private var searchFocused: Bool
     @FocusState private var folderFieldFocused: Bool
 
-    private var filtered: [URL] {
-        store.matches(query).filter { folder == nil || store.folder(of: $0) == folder }
+    // user folders shown in the rail (Daily is its own top-level item)
+    private var folders: [String] { store.folders.filter { $0 != "Daily" } }
+
+    private var notes: [URL] {
+        store.matches(query).filter { url in
+            switch source {
+            case .daily: return store.folder(of: url) == "Daily"
+            case .recent: return true
+            case .folder(let f): return store.folder(of: url) == f
+            }
+        }
     }
 
     private var groups: [(String, [URL])] {
         let cal = Calendar.current
         let weekAgo = Date().addingTimeInterval(-7 * 86400)
-        let m = filtered
+        let m = notes
         return [
             ("Today", m.filter { cal.isDateInToday(store.modified($0)) }),
             ("This Week", m.filter { !cal.isDateInToday(store.modified($0)) && store.modified($0) > weekAgo }),
@@ -416,112 +470,119 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NavBar {
+            ChromeBar(store: store, title: "Library") {
                 Button { store.screen = .capture } label: { Image(systemName: "chevron.left") }
                     .help("Back to note (⌘L / Esc)")
                     .keyboardShortcut("l")
-            } center: {
-                NavCenter(store: store, title: "Library")
-            } right: {
-                Button { store.screen = .settings } label: { Image(systemName: "gearshape") }
-                    .help("Settings")
             }
 
+            HStack(spacing: 0) {
+                sourceRail
+                Divider()
+                noteColumn
+            }
+        }
+    }
+
+    // MARK: left rail
+
+    private var sourceRail: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    sourceRow(.daily)
+                    sourceRow(.recent)
+                    if !folders.isEmpty {
+                        Text("Folders")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
+                        ForEach(folders, id: \.self) { sourceRow(.folder($0)) }
+                    }
+                }
+                .padding(.horizontal, 6).padding(.top, 8)
+            }
+
+            Divider().opacity(0.4)
+            if creatingFolder {
+                TextField("Folder name", text: $newFolderName)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .focused($folderFieldFocused)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .onSubmit {
+                        store.createFolder(newFolderName)
+                        if !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty {
+                            source = .folder(newFolderName.trimmingCharacters(in: .whitespaces))
+                        }
+                        newFolderName = ""; creatingFolder = false
+                    }
+                    .onExitCommand { newFolderName = ""; creatingFolder = false }
+            } else {
+                Button {
+                    creatingFolder = true; folderFieldFocused = true
+                } label: {
+                    Label("New Folder", systemImage: "folder.badge.plus").font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+            }
+        }
+        .frame(width: 150)
+    }
+
+    private func sourceRow(_ s: LibrarySource) -> some View {
+        Button { source = s } label: {
+            Label(s.label, systemImage: s.symbol)
+                .font(.callout).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(source == s ? Color.accentColor.opacity(0.18) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: right column
+
+    private var noteColumn: some View {
+        VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search notes…", text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
-                    .onSubmit { if let first = filtered.first { store.open(first) } }
+                    .onSubmit { if let first = notes.first { store.open(first) } }
             }
-            .padding(.horizontal, 12).padding(.bottom, 8)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    // chips don't scale past a handful — switch to a picker, no user setting
-                    if store.folders.count > 5 {
-                        Menu {
-                            Button("All") { folder = nil }
-                            Divider()
-                            ForEach(store.folders, id: \.self) { f in
-                                Button(f) { folder = f }
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "folder")
-                                Text(folder ?? "All")
-                                Image(systemName: "chevron.down").font(.caption2)
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(Color.secondary.opacity(0.1), in: Capsule())
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                    } else {
-                        chip("All", nil)
-                        ForEach(store.folders, id: \.self) { chip($0, $0) }
-                    }
-                    if creatingFolder {
-                        TextField("Name", text: $newFolderName)
-                            .textFieldStyle(.plain)
-                            .font(.caption)
-                            .frame(width: 80)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(Color.secondary.opacity(0.1), in: Capsule())
-                            .focused($folderFieldFocused)
-                            .onSubmit {
-                                store.createFolder(newFolderName)
-                                newFolderName = ""
-                                creatingFolder = false
-                            }
-                            .onExitCommand { creatingFolder = false }
-                    } else {
-                        Button {
-                            creatingFolder = true
-                            folderFieldFocused = true
-                        } label: {
-                            Image(systemName: "folder.badge.plus").font(.caption)
-                        }
-                        .buttonStyle(.borderless).foregroundStyle(.secondary)
-                        .help("New folder")
-                    }
-                }
-                .padding(.horizontal, 12).padding(.bottom, 8)
-            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
             Divider().opacity(0.4)
 
-            List {
-                ForEach(groups, id: \.0) { name, urls in
-                    Section {
-                        ForEach(urls, id: \.self) { url in
-                            NoteRow(store: store, url: url)
+            if groups.isEmpty {
+                Spacer()
+                Text(query.isEmpty ? "No notes here yet" : "No matches")
+                    .font(.callout).foregroundStyle(.tertiary)
+                Spacer()
+            } else {
+                List {
+                    ForEach(groups, id: \.0) { name, urls in
+                        Section {
+                            ForEach(urls, id: \.self) { url in
+                                NoteRow(store: store, url: url)
+                            }
+                        } header: {
+                            Text(name).font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                         }
-                    } header: {
-                        Text(name).font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                     }
                 }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
         }
+        .frame(maxWidth: .infinity)
         .onAppear { searchFocused = true }
     }
-
-    @ViewBuilder private func chip(_ label: String, _ value: String?) -> some View {
-        Button {
-            folder = value
-        } label: {
-            Text(label)
-                .font(.caption)
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(folder == value ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1),
-                            in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
 }
 
 struct NoteRow: View {

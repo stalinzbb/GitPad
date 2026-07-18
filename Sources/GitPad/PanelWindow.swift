@@ -25,20 +25,17 @@ final class PanelWindow: NSPanel {
         host.layer?.masksToBounds = true
         contentView = host
         setFrameAutosaveName("GitPad.panel")
-        if frame.width < 300 { center() } // first launch, no saved frame
+        // first launch, or a saved pill-sized frame → restore a sane full size
+        if frame.width < 300 {
+            setContentSize(NSSize(width: 400, height: 560))
+            center()
+        }
     }
 
     override var canBecomeKey: Bool { true }
 
-    // Esc steps back through the hierarchy: gitSetup → settings → library → capture → hide
-    override func cancelOperation(_ sender: Any?) {
-        switch store.screen {
-        case .gitSetup: store.screen = .settings
-        case .settings: store.screen = .library
-        case .library: store.screen = .capture
-        default: orderOut(nil)
-        }
-    }
+    // Esc steps back one level; the store owns the hierarchy.
+    override func cancelOperation(_ sender: Any?) { store.goBack() }
 
     private var expandedFrame: NSRect?
 

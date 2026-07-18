@@ -109,38 +109,38 @@ struct GitSetupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NavBar {
-                Button { store.screen = .settings } label: { Image(systemName: "chevron.left") }
+            ChromeBar(store: store, title: "Set up sync", showSettings: false) {
+                Button { store.goBack() } label: { Image(systemName: "chevron.left") }
                     .help("Back (Esc)")
-            } center: {
-                NavCenter(store: store, title: "Set up sync")
-            } right: { EmptyView() }
+            }
 
             VStack(alignment: .leading, spacing: 18) {
-                step(1, "Create a private repository",
-                     "Any git host works. On GitHub: New repository → Private.")
                 if ghReady {
-                    Button {
-                        createRepo()
-                    } label: {
+                    step(1, "Create a private repo — one click",
+                         "You're signed in to the gh CLI, so GitPad can make the repo and wire up auth for you. No SSH keys needed.")
+                    Button { createRepo() } label: {
                         Label("Create a private repo for me", systemImage: "wand.and.stars")
                     }
                     .padding(.leading, 30)
                     .disabled(working)
+                    Text("Prefer your own? Paste an SSH or HTTPS URL below instead.")
+                        .font(.caption2).foregroundStyle(.tertiary).padding(.leading, 30)
                 } else {
+                    step(1, "Create a private repository",
+                         "Any git host works. On GitHub: New repository → Private.")
                     Link("Open github.com/new ↗", destination: URL(string: "https://github.com/new")!)
                         .font(.callout)
                         .padding(.leading, 30)
                 }
 
-                step(2, "Paste its SSH URL",
-                     "Uses the SSH keys already on this Mac — nothing to log into.")
+                step(2, "Paste the repo URL",
+                     "SSH (git@github.com:you/notes.git) uses this Mac's keys — nothing to log into. HTTPS works too if you use the gh CLI or a credential helper.")
                 TextField("git@github.com:you/notes.git", text: $remote)
                     .textFieldStyle(.roundedBorder)
                     .padding(.leading, 30)
 
                 step(3, "Save & Sync",
-                     "GitPad then syncs on every save, every 5 minutes, and on wake.")
+                     "GitPad checks the connection, syncs once, then keeps syncing on every save, every 5 minutes, and on wake.")
             }
             .padding(20)
             Spacer()
@@ -187,6 +187,7 @@ struct GitSetupView: View {
         result = nil
         DispatchQueue.global().async {
             GitSync.setRemote(url, in: store.dir)
+            if url.hasPrefix("https://") { GitSync.enableHTTPSAuth() } // let gh's token drive https pushes
             let ls = GitSync.run(["ls-remote", url], in: store.dir)
             if ls.status != 0 {
                 let msg = GitSync.friendlyError(ls.out)

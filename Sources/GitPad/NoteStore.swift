@@ -28,6 +28,23 @@ final class NoteStore: ObservableObject {
     }
     @Published var pill = false
     @Published var screen: Screen = .capture
+    private var settingsReturn: Screen = .capture
+
+    /// Open Settings from any screen, remembering where to return.
+    func openSettings() {
+        if screen != .settings && screen != .gitSetup { settingsReturn = screen }
+        screen = .settings
+    }
+
+    /// One step back for Esc / the back chevron.
+    func goBack() {
+        switch screen {
+        case .gitSetup: screen = .settings
+        case .settings: screen = settingsReturn
+        case .library: screen = .capture
+        default: onHide?() // capture / onboarding: nothing above → hide
+        }
+    }
 
     var onSaved: (() -> Void)?
     var onHide: (() -> Void)?
