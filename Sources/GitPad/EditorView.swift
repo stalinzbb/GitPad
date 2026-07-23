@@ -21,11 +21,14 @@ struct Theme: Identifiable {
     let appearance: NSAppearance.Name?  // nil = follow system; drives every native control
     let accent: NSColor                 // checkboxes, chips (and, wrapped, the SwiftUI tint)
     let code: NSColor                   // inline code
-    private let tintHex: UInt?          // opaque swatch bg; also the ~0.2 editor tint. nil = System
+    private let tintHex: UInt?          // opaque panel surface. nil = System (follow the OS)
 
     var accentSwift: Color { Color(nsColor: accent) }
-    var editorTint: Color? { tintHex.map { Color(hex: $0).opacity(0.20) } }
-    var swatchBg: Color { tintHex.map { Color(hex: $0) } ?? Color(nsColor: .windowBackgroundColor) }
+    /// The panel's own background. Text sits on THIS, never on the desktop — which is what
+    /// keeps the window readable over a white backdrop. System follows the OS window color,
+    /// so it adapts light/dark instead of having no surface at all.
+    var surface: Color { tintHex.map { Color(hex: $0) } ?? Color(nsColor: .windowBackgroundColor) }
+    var swatchBg: Color { surface }
 
     /// The common case: a preset from hex colors + a light/dark base.
     init(id: String, base: ThemeBase, accent: UInt, code: UInt, tint: UInt) {
@@ -73,6 +76,17 @@ enum Motion {
     static var pop:    Animation? { reduce ? nil : .spring(response: 0.30, dampingFraction: 0.7) }
 }
 
+/// Contrast floor for the floating panel. The window blends `.behindWindow`, so without
+/// a real surface the text renders against whatever is on screen — unreadable over white,
+/// because `labelColor` follows the window's *appearance*, not the actual backdrop.
+/// One tunable: how much of the material shows through.
+enum PanelSurface {
+    static var reduceTransparency: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
+    static var opacity: Double { reduceTransparency ? 1.0 : 0.92 }
+}
+
 /// Ambient sync-state color, shared by every NavBar dot + the pill.
 func syncColor(_ status: SyncStatus) -> Color {
     switch status {
@@ -93,9 +107,8 @@ struct EditorView: View {
     var body: some View {
         ZStack {
             GlassBackground()
-            if let tint = theme.editorTint {
-                Rectangle().fill(tint).allowsHitTesting(false)
-            }
+            // the contrast floor: content always sits on the theme's own surface
+            Rectangle().fill(theme.surface).opacity(PanelSurface.opacity).allowsHitTesting(false)
             Group {
                 if store.pill {
                     PillView(store: store)
@@ -103,7 +116,12 @@ struct EditorView: View {
                     screens
                 }
             }
+            if !store.pill, store.lastDeleted != nil {
+                UndoDeleteBanner(store: store)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(Motion.quick, value: store.lastDeleted?.original)
         .tint(theme.accentSwift) // buttons/toggles/sliders/selection take the theme accent
         .overlay( // hairline edge; material below dims itself when the window loses key
             RoundedRectangle(cornerRadius: store.pill ? 20 : 14, style: .continuous)
@@ -158,19 +176,80 @@ struct NavBar<L: View, C: View, R: View>: View {
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+        // 8pt: the icon containers carry their own inset, so the glyphs still land
+        // on the same optical margin as the body text.
+        .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 6)
     }
 }
 
-/// Uniformly sized nav-bar glyph so mixed SF Symbols line up and space evenly.
-/// A square box + fixed weight makes every glyph center identically, so the left
-/// cluster (library/new) and right cluster (settings/minimize/close) align exactly.
-func navIcon(_ name: String) -> some View {
-    Image(systemName: name)
-        .font(.system(size: 13, weight: .regular))
-        .imageScale(.medium)
-        .frame(width: 24, height: 24)
-        .contentShape(Rectangle())
+/// Every chrome control is this: one identical square container, one glyph size/weight,
+/// one hover background. Alignment then comes from the container geometry rather than
+/// from each SF Symbol's own optical center — which is why mixing a heavy glyph
+/// (square.and.pencil) with a thin one (xmark) used to read as misaligned.
+/// Pair it with symmetric glyphs; see `ChromeGlyph`.
+struct ChromeIcon: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    static let side: CGFloat = 28 // container; 2pt gaps → ~30pt pitch
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .medium))
+                .symbolRenderingMode(.monochrome)
+                .frame(width: Self.side, height: Self.side)
+                .background(hovering ? Color.primary.opacity(0.08) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
+        .help(help)
+    }
+}
+
+/// The chrome glyph set — symmetric, matched optical weight, so the clusters balance.
+enum ChromeGlyph {
+    static let back     = "chevron.left"
+    static let library  = "square.grid.2x2"
+    static let newNote  = "plus"          // was square.and.pencil (heavy, juts top-right)
+    static let settings = "gearshape"
+    static let minimize = "minus"         // was a busy 4-arrow glyph
+    static let close    = "xmark"
+}
+
+/// "Note deleted — Undo", bottom-anchored, self-dismissing. The delete already went to
+/// the Trash; this just makes the slip one click to reverse instead of a Finder trip.
+struct UndoDeleteBanner: View {
+    @ObservedObject var store: NoteStore
+
+    var body: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 10) {
+                Text("Note deleted").font(.callout)
+                Spacer(minLength: 0)
+                Button("Undo") { store.undoDelete() }
+                    .buttonStyle(.borderless)
+                    .font(.callout.weight(.medium))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .padding(.horizontal, 12).padding(.bottom, 12)
+        }
+        .task(id: store.lastDeleted?.original) { // restarts the timer for each new delete
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            store.lastDeleted = nil
+        }
+    }
 }
 
 /// Standard header: a screen-specific left slot + the persistent right cluster
@@ -189,15 +268,12 @@ struct ChromeBar<L: View>: View {
         } center: {
             NavCenter(store: store, title: title, subtitle: subtitle, showSyncDot: showSyncDot)
         } right: {
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 if showSettings {
-                    Button { store.openSettings() } label: { navIcon("gearshape") }
-                        .help("Settings (⌘,)")
+                    ChromeIcon(symbol: ChromeGlyph.settings, help: "Settings (⌘,)") { store.openSettings() }
                 }
-                Button { store.setPill?(true) } label: { navIcon("arrow.down.right.and.arrow.up.left") }
-                    .help("Minimize to pill (⌘M)")
-                Button { store.onHide?() } label: { navIcon("xmark") }
-                    .help("Close (Esc)")
+                ChromeIcon(symbol: ChromeGlyph.minimize, help: "Minimize to pill (⌘M)") { store.setPill?(true) }
+                ChromeIcon(symbol: ChromeGlyph.close, help: "Close (Esc)") { store.onHide?() }
             }
         }
         // double-click the bar (title-bar convention) → minimize to pill
@@ -221,7 +297,7 @@ struct NavCenter: View {
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
             }
             if let subtitle {
-                Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .frame(maxWidth: 200)
@@ -286,11 +362,9 @@ struct CaptureView: View {
             ChromeBar(store: store,
                       title: store.selected.map { store.title(for: $0) } ?? "",
                       subtitle: store.selected.map { subtitle(for: $0) }) {
-                HStack(spacing: 4) {
-                    Button { store.screen = .library } label: { navIcon("square.grid.2x2") }
-                        .help("Library (⌘L)")
-                    Button { store.newNote() } label: { navIcon("square.and.pencil") }
-                        .help("New note (⌘N)")
+                HStack(spacing: 2) {
+                    ChromeIcon(symbol: ChromeGlyph.library, help: "Library (⌘L)") { store.screen = .library }
+                    ChromeIcon(symbol: ChromeGlyph.newNote, help: "New note (⌘N)") { store.newNote() }
                 }
             }
 
@@ -338,8 +412,7 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             ChromeBar(store: store, title: "Settings", showSettings: false, showSyncDot: false) {
-                Button { store.goBack() } label: { navIcon("chevron.left") }
-                    .help("Back (Esc)")
+                ChromeIcon(symbol: ChromeGlyph.back, help: "Back (Esc)") { store.goBack() }
             }
 
             Form {
@@ -380,7 +453,7 @@ struct SettingsView: View {
                             Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
                             Text(store.syncStatus.label)
                             if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
-                                Text("↑\(ab.ahead) ↓\(ab.behind)").foregroundStyle(.tertiary)
+                                Text("↑\(ab.ahead) ↓\(ab.behind)").foregroundStyle(.secondary)
                             }
                         }
                         .font(.callout).foregroundStyle(.secondary)
@@ -601,11 +674,9 @@ struct LibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             ChromeBar(store: store, title: "Library") {
-                HStack(spacing: 4) {
-                    Button { store.screen = .capture } label: { navIcon("chevron.left") }
-                        .help("Back to note (⌘L / Esc)")
-                    Button { newNoteHere() } label: { navIcon("square.and.pencil") }
-                        .help(newNoteHelp)
+                HStack(spacing: 2) {
+                    ChromeIcon(symbol: ChromeGlyph.back, help: "Back to note (⌘L / Esc)") { store.screen = .capture }
+                    ChromeIcon(symbol: ChromeGlyph.newNote, help: newNoteHelp) { newNoteHere() }
                 }
             }
 
@@ -645,7 +716,7 @@ struct LibraryView: View {
                     sourceRow(.inbox)
                     if !folders.isEmpty {
                         Text("Folders")
-                            .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
                         ForEach(folders, id: \.self) { f in
                             FolderRailRow(name: f, selected: source == .folder(f),
@@ -734,7 +805,7 @@ struct LibraryView: View {
             if groups.isEmpty {
                 Spacer()
                 Text(searching ? "No matches" : "No notes here yet")
-                    .font(.callout).foregroundStyle(.tertiary)
+                    .font(.callout).foregroundStyle(.secondary)
                 Spacer()
             } else {
                 List {
@@ -744,7 +815,7 @@ struct LibraryView: View {
                                 NoteRow(store: store, url: url)
                             }
                         } header: {
-                            Text(name).font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                            Text(name).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -779,12 +850,12 @@ struct FolderRailRow: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .rotationEffect(.degrees(90)) // vertical ⋮ (no single SF symbol for it)
-                    .font(.caption)
+                    .font(.system(size: 13, weight: .medium))
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .tint(.secondary) // borderlessButton tints its label with accent; force it to match the chrome
             .foregroundStyle(.secondary)
-            .frame(width: 22, height: 22)      // same hit box as a navIcon so it lines up
+            .frame(width: ChromeIcon.side, height: ChromeIcon.side) // same geometry as the nav bar
             .contentShape(Rectangle())
             .opacity(hovering ? 1 : 0)
         }
@@ -814,8 +885,8 @@ struct NoteRow: View {
                 Text(store.title(for: url)).lineLimit(1)
                 HStack(spacing: 4) {
                     if let f = store.folder(of: url) {
-                        Text(f).font(.caption2).foregroundStyle(.tertiary)
-                        Text("·").font(.caption2).foregroundStyle(.tertiary)
+                        Text(f).font(.caption2).foregroundStyle(.secondary)
+                        Text("·").font(.caption2).foregroundStyle(.secondary)
                     }
                     Text(store.modified(url), format: .relative(presentation: .named))
                         .font(.caption2).foregroundStyle(.secondary)
@@ -875,7 +946,8 @@ struct MarkdownTextView: NSViewRepresentable {
         tv.isRichText = false
         tv.allowsUndo = true
         tv.font = Coordinator.baseFont(fontSize, design)
-        tv.textContainerInset = NSSize(width: 12, height: 8)
+        tv.textContainerInset = NSSize(width: 20, height: 14) // room to breathe, like a real notes app
+        tv.defaultParagraphStyle = Coordinator.paragraphStyle
         tv.drawsBackground = false
         tv.isVerticallyResizable = true
         tv.autoresizingMask = [.width]
@@ -929,6 +1001,16 @@ struct MarkdownTextView: NSViewRepresentable {
             self.design = parent.design
         }
 
+        /// Shared leading. MUST also ride in the `base` attribute dict below — `highlight()`
+        /// calls `setAttributes`, which replaces every attribute on the range, so a style set
+        /// only via `defaultParagraphStyle` would be wiped on the first keystroke.
+        static let paragraphStyle: NSParagraphStyle = {
+            let p = NSMutableParagraphStyle()
+            p.lineHeightMultiple = 1.25
+            p.paragraphSpacing = 6
+            return p
+        }()
+
         // MARK: fonts
         static func baseFont(_ size: CGFloat, _ design: String) -> NSFont {
             switch design {
@@ -981,7 +1063,8 @@ struct MarkdownTextView: NSViewRepresentable {
                 try! NSRegularExpression(pattern: p, options: [.anchorsMatchLines])
             }
             let f = Self.baseFont(fontSize, design)
-            let base: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.labelColor]
+            let base: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.labelColor,
+                                                       .paragraphStyle: Self.paragraphStyle]
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
                 // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
                 (re(#"^# .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 8, design))]),
