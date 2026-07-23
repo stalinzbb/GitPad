@@ -7,10 +7,13 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
 
 ## Build & test
 
-- **Build:** `./build.sh` → `GitPad.app` (SwiftPM release build + ad-hoc codesign).
+- **Build:** `./build.sh` → `GitPad.app` (SwiftPM release build + ad-hoc codesign; also
+  regenerates `Resources/AppIcon.icns` via `make-icns.sh` → `make-icon.swift` when stale).
 - **Test:** `./test_gitsync.sh` — drives the real binary (`GitPad --sync <dir>`) through a
-  bare remote: same-line conflicts, README/unrelated-histories, offline. Run after any
-  change near `GitSync.sync` or `NoteStore` save/refresh.
+  bare remote: same-line conflicts, unrelated histories, true-conflict-only copies,
+  modify/delete, push retry, new-device adoption (and its negative guard). Run after any
+  change near `GitSync.sync` or `NoteStore` save/refresh. `GITPAD_DEVICE_NAME` overrides
+  the commit author per invocation.
 - **Quick compile:** `swift build -c release`.
 
 ## Source map (7 files, `Sources/GitPad/`)

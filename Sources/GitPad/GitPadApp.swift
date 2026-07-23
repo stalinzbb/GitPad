@@ -104,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var revealItem: NSMenuItem!         // anchor for inserting the dynamic recent-notes section
     var recentItems: [NSMenuItem] = []  // dynamically rebuilt on each menu open
     var syncTimer: Timer?
+    private var lastSyncKick = Date.distantPast
     private var pillDragOrigin: NSRect?
     private var pillDragMouse: NSPoint?
     private let syncQueue = DispatchQueue(label: "gitpad.sync")
@@ -148,12 +149,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel = PanelWindow(store: store)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "GitPad")
+        statusItem.button?.image = statusImage(alert: false)
         let menu = NSMenu()
         openItem = menu.addItem(withTitle: "Open  (\(Hotkey.display))", action: #selector(togglePanel), keyEquivalent: "")
         menu.addItem(withTitle: "Append Clipboard to Daily", action: #selector(appendClipboard), keyEquivalent: "")
         menu.addItem(withTitle: "Sync Now", action: #selector(syncNow), keyEquivalent: "")
-        menu.addItem(withTitle: "Set Remote…", action: #selector(setRemote), keyEquivalent: "")
+        menu.addItem(withTitle: "Set Up Sync…", action: #selector(showGitSetup), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         // recent notes are inserted just above this item on each open (menuNeedsUpdate)
@@ -216,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            syncIfStale() // freshest notes when you actually look at them
         }
     }
 
@@ -247,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if store.pill { store.setPill?(false) }
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        syncIfStale()
     }
 
     @objc func openRecent(_ sender: NSMenuItem) {
@@ -305,14 +308,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Menu-bar glyph. Always a *template* image, so macOS inverts it for light/dark
+    /// menu bars and Increase Contrast for free. The badged variant is the
+    /// colour-blind-safe failure cue; the orange tint is only a secondary hint.
+    private func statusImage(alert: Bool) -> NSImage? {
+        let names = alert ? ["note.text.badge.exclamationmark", "exclamationmark.triangle"]
+                          : ["note.text", "square.and.pencil"]
+        let label = alert ? "GitPad — sync problem" : "GitPad"
+        let img = names.lazy.compactMap {
+            NSImage(systemSymbolName: $0, accessibilityDescription: label)
+        }.first
+        img?.isTemplate = true
+        if img == nil { statusItem.button?.title = "G" } // last resort: never an invisible item
+        return img
+    }
+
+    /// Panel-show trigger: sync unless one just ran. Cheap enough to call on every show.
+    func syncIfStale() {
+        guard !store.syncing, Date().timeIntervalSince(lastSyncKick) > 30 else { return }
+        backgroundSync()
+    }
+
     func backgroundSync() {
         let dir = store.dir
         store.syncing = true
+        lastSyncKick = Date()
         syncQueue.async { [weak self] in
             let hasRemote = GitSync.run(["remote", "get-url", "origin"], in: dir).status == 0
             let ok = GitSync.sync(dir: dir)
             DispatchQueue.main.async {
+                self?.statusItem.button?.image = self?.statusImage(alert: hasRemote && !ok)
                 self?.statusItem.button?.contentTintColor = (ok || !hasRemote) ? nil : .systemOrange
+                if ok && hasRemote { UserDefaults.standard.set(Date(), forKey: "lastSyncOK") }
                 self?.store.syncStatus = !hasRemote ? .noRemote : ok ? .synced(Date()) : .offline
                 self?.store.syncing = false
                 self?.store.refresh() // pick up files pulled from remote
@@ -320,19 +347,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc func setRemote() {
-        let alert = NSAlert()
-        alert.messageText = "Git remote URL"
-        alert.informativeText = "SSH URL of your private notes repo, e.g. git@github.com:you/notes.git"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
-        field.stringValue = GitSync.remoteURL(in: store.dir)
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertFirstButtonReturn {
-            GitSync.setRemote(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
-            backgroundSync()
-        }
+    @objc func showGitSetup() {
+        store.screen = .gitSetup
+        showPanel()
     }
 }

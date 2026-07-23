@@ -17,7 +17,7 @@ subscription, no Electron.
 - **Daily notes** — ⌥Space always lands on today's note; ⌘N for a fresh one.
 - **Library** — search-as-you-type, Pinned / Today / This Week / Earlier, folders. Pin notes and reveal any in Finder from the ⋯ menu.
 - **Quick capture from anywhere else** — the `gitpad://` URL scheme (`new?text=`, `daily`, `daily?append=`) drives GitPad from Raycast, Alfred, Shortcuts.app, or a shell script; "Append Clipboard to Daily" and your recent notes live in the status-bar menu.
-- **Invisible git sync** — commits, merges and pushes on every save, every 5 minutes, and on wake. Real conflicts resolve automatically with nothing lost (the remote copy is kept alongside).
+- **Invisible git sync** — commits, merges and pushes on every save, every 5 minutes, on wake, and when you open the panel. A second Mac pointed at the same repo adopts it cleanly instead of fighting it; genuine conflicts keep both versions and get their own review screen. See [SYNCING.md](SYNCING.md).
 - **Pill mode** — collapse the whole UI to a draggable 240×40 lozenge that floats over your work; ⌥Space springs it back.
 - **Themes** — System, Sepia, Nord, Dracula, Solarized Light. Each flips the whole window's appearance so every control adapts, not just a color wash.
 - **Zero dependencies** — Swift + SwiftUI/AppKit, seven source files, built with SwiftPM.
@@ -60,6 +60,11 @@ Homebrew cask is on the roadmap.
 Auth is your existing SSH setup (`~/.ssh`) — GitPad never sees or stores credentials.
 If you have the `gh` CLI installed and authenticated, the setup screen offers a
 one-click "Create a private repo for me".
+
+If sync breaks, Settings → Sync names the actual cause (rejected SSH key, changed host
+key, missing repo, HTTPS login) and offers the fix — including a one-click switch to
+HTTPS via the `gh` CLI. Adding a second Mac and resolving conflicts are covered in
+[SYNCING.md](SYNCING.md).
 
 ## Architecture
 

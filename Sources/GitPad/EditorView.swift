@@ -136,6 +136,9 @@ struct EditorView: View {
             case .gitSetup:
                 GitSetupView(store: store)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            case .conflicts:
+                ConflictView(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
         .animation(Motion.screen, value: store.screen)
@@ -190,6 +193,12 @@ struct ChromeBar<L: View>: View {
             NavCenter(store: store, title: title, subtitle: subtitle, showSyncDot: showSyncDot)
         } right: {
             HStack(spacing: 4) {
+                if !store.conflicts.isEmpty && store.screen != .conflicts {
+                    Button { store.screen = .conflicts } label: {
+                        navIcon("exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    .help("Two Macs edited the same note — review")
+                }
                 if showSettings {
                     Button { store.openSettings() } label: { navIcon("gearshape") }
                         .help("Settings (⌘,)")
@@ -278,8 +287,8 @@ struct CaptureView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
-
     @AppStorage("theme") private var themeID = "System"
+    @State private var nudgeDismissed = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -294,6 +303,19 @@ struct CaptureView: View {
                 }
             }
 
+            if let since = staleSince {
+                HStack(spacing: 6) {
+                    Text("Sync hasn't worked since \(since.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Button("Fix") { store.openSettings() }
+                        .font(.caption2).buttonStyle(.borderless)
+                    Spacer(minLength: 0)
+                    Button { nudgeDismissed = true } label: { Image(systemName: "xmark").font(.caption2) }
+                        .buttonStyle(.borderless).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14).padding(.bottom, 6)
+            }
+
             MarkdownTextView(text: $store.text,
                              fontSize: CGFloat(editorFontSize),
                              design: fontDesign,
@@ -301,6 +323,14 @@ struct CaptureView: View {
         }
         // ⌘N/⌘L/⌘S/⌘⌫/⌘M/⌘, are handled by the main-menu "Note" submenu in AppDelegate,
         // so they work from every screen — not just here.
+    }
+
+    /// Nag only when sync is *broken*: a deliberate local-only setup (.noRemote) never nags.
+    private var staleSince: Date? {
+        guard !nudgeDismissed, store.syncStatus == .offline,
+              let last = UserDefaults.standard.object(forKey: "lastSyncOK") as? Date,
+              Date().timeIntervalSince(last) > 86_400 else { return nil }
+        return last
     }
 
     private func subtitle(for sel: URL) -> String {
@@ -387,21 +417,17 @@ struct SettingsView: View {
                     }
                     Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
                         .disabled(store.syncing)
+                    if store.syncStatus == .offline {
+                        FixSyncPanel(store: store)
+                    }
                 }
                 if !store.conflicts.isEmpty {
-                    Section("Conflicts — both machines edited the same note") {
-                        ForEach(store.conflicts, id: \.self) { copy in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(store.title(for: copy)).lineLimit(1)
-                                HStack(spacing: 10) {
-                                    Button("Compare") { store.open(copy) }
-                                    Button("Use This Version") { store.resolveKeep(copy) }
-                                    Button("Discard") { store.resolveDiscard(copy) }
-                                        .foregroundStyle(.red)
-                                }
-                                .font(.caption)
-                                .buttonStyle(.borderless)
-                            }
+                    Section("Conflicts") {
+                        Button {
+                            store.screen = .conflicts
+                        } label: {
+                            Label("Review \(store.conflicts.count) conflict\(store.conflicts.count == 1 ? "" : "s")…",
+                                  systemImage: "exclamationmark.triangle.fill")
                         }
                     }
                 }
@@ -451,6 +477,164 @@ struct SettingsView: View {
                 if remote.isEmpty { remote = url }
                 aheadBehind = ab
             }
+        }
+    }
+}
+
+/// Sync is failing — say why in plain language and offer the one-click fix.
+/// The diagnosis is deliberately async: `ls-remote` can hang for a long time.
+struct FixSyncPanel: View {
+    @ObservedObject var store: NoteStore
+    @State private var problem: GitSync.SyncProblem?
+    @State private var ghReady = false
+    @State private var note: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch problem {
+            case nil:
+                Text("Checking what went wrong…").font(.caption).foregroundStyle(.secondary)
+            case .sshAuth(let key):
+                Text("The repo host rejected this Mac's SSH key (\(URL(fileURLWithPath: key).lastPathComponent)).")
+                    .font(.caption)
+                if ghReady {
+                    Button("Switch to HTTPS via GitHub CLI") { switchToHTTPS() }
+                }
+                Button("Copy public key") {
+                    let pub = (try? String(contentsOfFile: key + ".pub", encoding: .utf8)) ?? ""
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(pub, forType: .string)
+                    note = pub.isEmpty ? "Couldn't read \(key).pub" : "Copied — paste it at your host"
+                }
+                if GitSync.remoteURL(in: store.dir).contains("github.com") {
+                    Link("Add a key on GitHub ↗", destination: URL(string: "https://github.com/settings/ssh/new")!)
+                        .font(.caption)
+                }
+            case .repoMissing:
+                Text("That repository isn't there — check the URL.").font(.caption)
+                Button("Set up sync…") { store.screen = .gitSetup }
+            case .hostKeyChanged:
+                Text("The server's SSH key changed. That can be a man-in-the-middle attack — verify the new key with your host before trusting it.")
+                    .font(.caption).foregroundStyle(.orange)
+            case .httpsNeedsLogin:
+                Text("This HTTPS URL needs a login. Sign in to the gh CLI (`gh auth login`) or use the SSH URL instead.")
+                    .font(.caption)
+            case .offline:
+                Text("Network unreachable — GitPad retries every 5 minutes.").font(.caption)
+            case .noRemote, .ok:
+                EmptyView()
+            }
+            if let note {
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.borderless)
+        .onAppear(perform: diagnose)
+    }
+
+    private func diagnose() {
+        DispatchQueue.global().async {
+            let p = GitSync.diagnose(dir: store.dir)
+            let gh = GitSync.ghReady()
+            DispatchQueue.main.async { problem = p; ghReady = gh }
+        }
+    }
+
+    /// Exactly the manual fix: point origin at HTTPS and let gh's token drive it.
+    private func switchToHTTPS() {
+        guard let https = GitSync.httpsURL(from: GitSync.remoteURL(in: store.dir)) else { return }
+        note = "Switching…"
+        DispatchQueue.global().async {
+            GitSync.setRemote(https, in: store.dir)
+            GitSync.enableHTTPSAuth()
+            DispatchQueue.main.async {
+                note = "Now using \(https)"
+                store.requestSync?()
+                diagnose()
+            }
+        }
+    }
+}
+
+// MARK: - Conflicts
+
+/// One screen for every conflict copy: what happened, both versions, three ways out.
+struct ConflictView: View {
+    @ObservedObject var store: NoteStore
+    @State private var selection: URL?
+
+    private var copy: URL? { selection ?? store.conflicts.first }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ChromeBar(store: store, title: "Conflicts", showSettings: false, showSyncDot: false) {
+                Button { store.goBack() } label: { navIcon("chevron.left") }
+                    .help("Back (Esc)")
+            }
+
+            Text("Two Macs edited the same note between syncs. GitPad kept this Mac's version and saved the other alongside it — nothing was lost.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14).padding(.bottom, 8)
+
+            if let copy {
+                if store.conflicts.count > 1 {
+                    Picker("", selection: Binding(get: { copy }, set: { selection = $0 })) {
+                        ForEach(store.conflicts, id: \.self) { c in
+                            Text(store.title(for: c)).tag(c)
+                        }
+                    }
+                    .labelsHidden().padding(.horizontal, 14).padding(.bottom, 6)
+                }
+                if let orig = store.original(for: copy) {
+                    HStack(spacing: 8) {
+                        pane("On this Mac", orig)
+                        pane("From \(store.conflictDevice(copy))", copy)
+                    }
+                    .padding(.horizontal, 14)
+                    HStack(spacing: 10) {
+                        Button("Keep Mine") { resolve { store.resolveDiscard(copy) } }
+                        Button("Use Theirs") { resolve { store.resolveKeep(copy) } }
+                        Button("Keep Both") { resolve { store.resolveKeepBoth(copy) } }
+                    }
+                    .font(.callout).padding(.vertical, 12)
+                } else {
+                    // the original is gone — this Mac deleted it while the other edited it
+                    VStack(spacing: 8) {
+                        Text("The note this came from no longer exists on this Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        pane("From \(store.conflictDevice(copy))", copy)
+                        HStack(spacing: 10) {
+                            Button("Keep as Note") { resolve { store.resolveKeepBoth(copy) } }
+                            Button("Discard") { resolve { store.resolveDiscard(copy) } }
+                        }
+                        .font(.callout)
+                    }
+                    .padding(14)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .onChange(of: store.conflicts) { list in if list.isEmpty { store.goBack() } }
+    }
+
+    private func resolve(_ action: () -> Void) {
+        action()
+        selection = nil
+    }
+
+    private func pane(_ label: String, _ url: URL) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollView {
+                Text((try? String(contentsOf: url, encoding: .utf8)) ?? "")
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
+            .frame(minHeight: 120)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
         }
     }
 }
