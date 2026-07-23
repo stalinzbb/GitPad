@@ -110,8 +110,7 @@ struct GitSetupView: View {
     var body: some View {
         VStack(spacing: 0) {
             ChromeBar(store: store, title: "Set up sync", showSettings: false, showSyncDot: false) {
-                Button { store.goBack() } label: { navIcon("chevron.left") }
-                    .help("Back (Esc)")
+                ChromeIcon(symbol: ChromeGlyph.back, help: "Back (Esc)") { store.goBack() }
             }
 
             VStack(alignment: .leading, spacing: 18) {

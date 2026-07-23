@@ -10,6 +10,28 @@ gotchas, and things that would surprise a contributor._
 - **Themes flip window appearance, not a color wash.** Each `Theme` sets `panel.appearance` (`.aqua` / `.darkAqua` / follow-system) via the `store.applyAppearance` callback wired in `AppDelegate` — same pattern as `onHide`. That's what makes native controls (text fields, lists, forms, popovers) render correctly per theme instead of all looking identical. `editorTint` is only a subtle (~0.2 opacity) layer over the material; the appearance switch does the real work.
 - **One NavBar for every screen** (`NavBar(left:center:right:)` in `EditorView.swift`). `chevron.left` always means "back one level"; `xmark` only on Capture (home has nowhere to go back to). Esc mirrors the clicks — see `PanelWindow.cancelOperation`.
 - **Pill mode replaced compact mode.** `store.pill` + `PanelWindow.applyPill(_:)` save/restore the expanded frame and animate the corner radius to height/2. Compact mode (and its 12pt font path and menu item) was deleted — one mode fewer.
+- **The panel needs a real surface, not just a tint.** The window blends `.behindWindow`
+  with a clear background, and `labelColor` resolves from the window's *appearance*, not
+  from what's actually behind it. A low-opacity tint therefore can't guarantee contrast —
+  over a white backdrop the material washes out while the text color stays put. `Theme.surface`
+  + `PanelSurface.opacity` (~0.92, 1.0 under Reduce Transparency) paint a real background so
+  text always sits on a known color. Don't reintroduce a low-opacity wash. Note System's
+  surface must stay `windowBackgroundColor` (dynamic) — it has no hex of its own.
+- **Chrome alignment comes from containers, not glyphs.** SF Symbols have different optical
+  centers, so framing each one identically is not enough — `square.and.pencil` next to
+  `xmark` reads as misaligned no matter the box. `ChromeIcon` gives every control the same
+  28×28 container/weight/hover, and `ChromeGlyph` keeps the set symmetric. Adding a chrome
+  button means adding a `ChromeGlyph` entry, not a bare `Image(systemName:)`.
+- **Editor leading lives in the highlighter's `base` attributes.** `highlight()` calls
+  `storage.setAttributes(base:range:)`, which *replaces* every attribute on the range. A
+  paragraph style set only via `defaultParagraphStyle` gets wiped on the first keystroke,
+  so `Coordinator.paragraphStyle` is included in `base` too.
+- **Delete = Trash + Undo, deliberately no confirmation.** `delete()` trashes the file
+  (already recoverable) and records the restore URL, so `undoDelete()` can put it back with
+  its pin. A modal on every delete taxes the intentional case and trains click-through; the
+  actual risk is an accidental ⌘⌫ (which shadows delete-to-line-start in the editor), and
+  undo covers exactly that. There is deliberately **no Archive folder** — folders + "Move to"
+  already do that job. The folder-delete alert stays: it touches many notes at once.
 - **Sync never blocks writing.** `GitSync.sync` does a clean merge first (with `--allow-unrelated-histories`, since a repo created with a README has history unrelated to our fresh `init`), then falls back to conflict copies + `-X ours`. See `GitSync.swift` comments.
 
 ## Gotchas / known issues
