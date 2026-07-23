@@ -3,6 +3,38 @@
 All notable changes to GitPad. Dates are release dates; format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.1] — unreleased
+
+Cross-device sync, an icon that behaves, and setup that explains itself.
+
+- **App icon.** A real Dock/Finder icon (`make-icon.swift` → `make-icns.sh`, regenerated
+  by `build.sh`). The menu-bar glyph is now an explicit **template** image, so it adapts
+  to light/dark menu bars and Increase Contrast; a sync failure switches it to a badged
+  symbol instead of signalling with color alone.
+- **True-conflict detection.** Conflict copies are written only for genuinely unmerged
+  files (`--diff-filter=U`), not for every file that differed.
+- **Device names.** Each Mac commits under its own name, and copies are named
+  `<note> (conflict from <device> <date>).md`. Old-format copies still work.
+- **New-device adoption.** A Mac whose notes are all still generated boilerplate adopts
+  an existing remote instead of manufacturing conflict copies of your real notes. One
+  typed character disables it.
+- **Conflict screen.** An orange ⚠ in the header of every screen opens a dedicated
+  review screen: both versions side by side, *Keep Mine* / *Use Theirs* / *Keep Both*.
+  Shown once automatically the first time a conflict appears.
+- **Sync doctor.** When sync fails, Settings names the cause — rejected SSH key (naming
+  the key ssh actually offered), changed host key, missing repo, HTTPS login, no network
+  — and offers the fix, including a one-click switch to HTTPS via the `gh` CLI.
+- **Modify/delete no longer wedges the repo**; a note edited on one Mac and deleted on
+  the other survives.
+- **Push retry.** A push that loses a race is retried once instead of being reported as
+  "offline".
+- **Fetch on show.** Opening the panel syncs (debounced to 30s), so what you see is fresh.
+- The menu bar's "Set Remote…" NSAlert is gone — it's now "Set Up Sync…", routing to the
+  real setup screen. Onboarding's Test button reports the same friendly errors as
+  everything else.
+- Docs: `SYNCING.md` added; SECURITY.md documents the `StrictHostKeyChecking=accept-new`
+  tradeoff. `test_gitsync.sh` grows to 8 scenarios.
+
 ## [0.9] — unreleased
 
 - Menu-driven shortcuts: ⌘N / ⌘L / ⌘S / ⌘⌫ / ⌘M / ⌘, now work from **every** screen

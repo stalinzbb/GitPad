@@ -83,8 +83,7 @@ struct OnboardingView: View {
         DispatchQueue.global().async {
             let r = GitSync.run(["ls-remote", url], in: store.dir)
             DispatchQueue.main.async {
-                testResult = r.status == 0 ? "✓ Connected"
-                    : "✗ Can't reach the repo — check the URL and your SSH key"
+                testResult = r.status == 0 ? "✓ Connected" : "✗ " + GitSync.friendlyError(r.out)
             }
         }
     }

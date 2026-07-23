@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-enum Screen { case onboarding, capture, library, settings, gitSetup }
+enum Screen { case onboarding, capture, library, settings, gitSetup, conflicts }
 
 enum SyncStatus: Equatable {
     case unknown, noRemote, synced(Date), offline
@@ -54,7 +54,7 @@ final class NoteStore: ObservableObject {
         switch screen {
         case .gitSetup: screen = .settings
         case .settings: screen = settingsReturn
-        case .library: screen = .capture
+        case .library, .conflicts: screen = .capture
         default: onHide?() // capture / onboarding: nothing above → hide
         }
     }
@@ -99,6 +99,13 @@ final class NoteStore: ObservableObject {
         folders = dirs.sorted()
         notes = found.sorted { modified($0) > modified($1) }
         if let sel = selected, !notes.contains(where: { $0.path == sel.path }) { selected = notes.first }
+        // first conflict ever: show the explainer once, and only from Capture so it
+        // can't yank the screen out from under someone mid-task
+        if !conflicts.isEmpty, screen == .capture,
+           !UserDefaults.standard.bool(forKey: "sawConflictIntro") {
+            UserDefaults.standard.set(true, forKey: "sawConflictIntro")
+            screen = .conflicts
+        }
     }
 
     // MARK: folders
@@ -291,6 +298,17 @@ final class NoteStore: ObservableObject {
         notes.filter { $0.lastPathComponent.contains(" (conflict ") }
     }
 
+    /// "…(conflict from Studio 2026-07-23 1200).md" → "Studio". Copies written by
+    /// older builds have no device in the name, hence the fallback.
+    func conflictDevice(_ conflictCopy: URL) -> String {
+        let name = conflictCopy.deletingPathExtension().lastPathComponent
+        guard let tail = name.components(separatedBy: " (conflict from ").dropFirst().first
+        else { return "another device" }
+        let parts = tail.split(separator: " ") // <device…> yyyy-MM-dd HHmm)
+        let device = parts.dropLast(2).joined(separator: " ")
+        return device.isEmpty ? "another device" : device
+    }
+
     func original(for conflictCopy: URL) -> URL? {
         guard let base = conflictCopy.lastPathComponent.components(separatedBy: " (conflict ").first
         else { return nil }
@@ -314,6 +332,24 @@ final class NoteStore: ObservableObject {
     /// Keep the original; trash the conflict copy.
     func resolveDiscard(_ conflictCopy: URL) {
         delete(conflictCopy)
+        onSaved?()
+    }
+
+    /// Keep both versions: rename the copy so it stops reading as a conflict.
+    func resolveKeepBoth(_ conflictCopy: URL) {
+        let fm = FileManager.default
+        let base = conflictCopy.deletingPathExtension().lastPathComponent
+            .components(separatedBy: " (conflict").first ?? "note"
+        let folder = conflictCopy.deletingLastPathComponent()
+        var dest = folder.appendingPathComponent("\(base) (from \(conflictDevice(conflictCopy))).md")
+        var n = 2
+        while fm.fileExists(atPath: dest.path) {
+            dest = folder.appendingPathComponent("\(base) (from \(conflictDevice(conflictCopy)) \(n)).md")
+            n += 1
+        }
+        try? fm.moveItem(at: conflictCopy, to: dest)
+        titleCache[conflictCopy] = nil; contentCache[conflictCopy] = nil
+        refresh()
         onSaved?()
     }
 

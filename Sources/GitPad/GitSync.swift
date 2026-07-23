@@ -11,6 +11,11 @@ enum GitSync {
         if let cwd { p.currentDirectoryURL = cwd }
         var env = ProcessInfo.processInfo.environment
         env["GIT_TERMINAL_PROMPT"] = "0" // never hang on auth prompts
+        // accept-new = trust a host we've never seen, but still hard-fail if a known
+        // host's key CHANGED (the case that actually matters). See SECURITY.md.
+        if env["GIT_SSH_COMMAND"] == nil {
+            env["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=accept-new"
+        }
         p.environment = env
         let pipe = Pipe()
         p.standardOutput = pipe
@@ -61,8 +66,8 @@ enum GitSync {
         if s.contains("permission denied") || s.contains("publickey") {
             return "SSH key not authorized — add this Mac's key to the repo host"
         }
-        if s.contains("host key verification") {
-            return "Host unknown — run `ssh -T git@github.com` once in Terminal to trust it"
+        if s.contains("host key verification") || s.contains("host identification has changed") {
+            return "The server's SSH key changed — verify it before trusting (could be an attack)"
         }
         if s.contains("could not read from remote") || s.contains("not found")
             || s.contains("does not exist") || s.contains("repository") {
@@ -108,9 +113,11 @@ enum GitSync {
     static func sync(dir: URL) -> Bool {
         if run(["rev-parse", "--git-dir"], in: dir).status != 0 {
             run(["init", "-b", "main"], in: dir)
-            run(["config", "user.name", "GitPad"], in: dir)
-            run(["config", "user.email", "gitpad@localhost"], in: dir)
         }
+        // unconditional (idempotent) so existing repos pick up the device name too —
+        // commit authors are how the conflict UI names "the other Mac"
+        run(["config", "user.name", deviceName], in: dir)
+        run(["config", "user.email", "gitpad@localhost"], in: dir)
 
         // 1. commit local changes
         run(["add", "-A"], in: dir)
@@ -123,38 +130,147 @@ enum GitSync {
         guard run(["remote", "get-url", "origin"], in: dir).status == 0 else { return true }
 
         let branch = run(["rev-parse", "--abbrev-ref", "HEAD"], in: dir).out
+        // ponytail: one blind retry covers the common push race (someone pushed between
+        // our fetch and our push); a truly offline machine fails fast at fetch again.
+        for _ in 0..<2 {
+            if reconcileAndPush(dir: dir, branch: branch) { return true }
+        }
+        return false
+    }
+
+    /// This Mac's name, used as the git author so conflict copies can say who they came from.
+    static var deviceName: String {
+        let raw = ProcessInfo.processInfo.environment["GITPAD_DEVICE_NAME"]
+            ?? Host.current().localizedName ?? "GitPad"
+        return raw.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+    }
+
+    /// fetch → adopt-or-merge → push. Returns true only if the push landed.
+    private static func reconcileAndPush(dir: URL, branch: String) -> Bool {
         guard run(["fetch", "origin"], in: dir).status == 0 else { return false } // offline
 
         let remote = "origin/\(branch)"
         if run(["rev-parse", "--verify", remote], in: dir).status == 0 {
-            // 2. try a clean merge first (--allow-unrelated-histories: a repo created
-            //    with a README has history unrelated to our fresh init)
-            if run(["merge", "--no-edit", "--allow-unrelated-histories", remote], in: dir).status != 0 {
-                run(["merge", "--abort"], in: dir)
-                // 3. real conflict: preserve remote versions as copies, then merge preferring local
-                let conflicted = run(["diff", "--name-only", "HEAD", remote], in: dir).out
-                    .split(separator: "\n").map(String.init)
-                let date = DateFormatter()
-                date.dateFormat = "yyyy-MM-dd HHmm"
-                for file in conflicted where file.hasSuffix(".md") {
-                    let show = run(["show", "\(remote):\(file)"], in: dir)
-                    guard show.status == 0 else { continue }
-                    let copy = file.replacingOccurrences(
-                        of: ".md", with: " (conflict \(date.string(from: Date()))).md")
-                    try? show.out.write(to: dir.appendingPathComponent(copy),
-                                        atomically: true, encoding: .utf8)
-                }
-                run(["add", "-A"], in: dir)
-                run(["commit", "-m", "conflict copies"], in: dir)
-                // ponytail: -X ours keeps local hunks; remote hunks live on in the copies
-                guard run(["merge", "--no-edit", "--allow-unrelated-histories", "-X", "ours", remote], in: dir).status == 0 else {
-                    run(["merge", "--abort"], in: dir)
-                    return false
-                }
+            if run(["merge-base", "HEAD", remote], in: dir).status != 0, isPristine(dir) {
+                // Fresh device pointed at an existing notes repo: unrelated histories AND
+                // every local file is still generated boilerplate. Merging here would
+                // manufacture conflict copies of the user's real notes, so adopt instead.
+                // ponytail: the only destructive line in the app — guarded by isPristine,
+                // which fails on a single user-typed character (test S8 covers it).
+                run(["reset", "--hard", remote], in: dir)
+            } else if run(["merge", "--no-edit", "--allow-unrelated-histories", remote], in: dir).status != 0 {
+                guard resolveConflict(dir: dir, remote: remote) else { return false }
             }
         }
-
-        // 4. push
         return run(["push", "-u", "origin", branch], in: dir).status == 0
+    }
+
+    /// Merge failed: keep this Mac's version, save the other Mac's alongside, finish the merge.
+    private static func resolveConflict(dir: URL, remote: String) -> Bool {
+        // only genuinely unmerged paths — a file that merged cleanly never gets a copy
+        let unmerged = run(["diff", "--name-only", "--diff-filter=U"], in: dir).out
+            .split(separator: "\n").map(String.init)
+        run(["merge", "--abort"], in: dir)
+
+        let date = DateFormatter()
+        date.dateFormat = "yyyy-MM-dd HHmm"
+        for file in unmerged where file.hasSuffix(".md") {
+            let show = run(["show", "\(remote):\(file)"], in: dir)
+            guard show.status == 0 else { continue } // remote deleted it → nothing to copy
+            let who = run(["log", "-1", "--format=%an", remote, "--", file], in: dir)
+            let device = who.status == 0 && !who.out.isEmpty ? who.out : "other device"
+            let copy = file.replacingOccurrences(
+                of: ".md", with: " (conflict from \(device) \(date.string(from: Date()))).md")
+            try? show.out.write(to: dir.appendingPathComponent(copy),
+                                atomically: true, encoding: .utf8)
+        }
+        run(["add", "-A"], in: dir)
+        run(["commit", "-m", "conflict copies"], in: dir)
+
+        // ponytail: -X ours keeps local hunks; remote hunks live on in the copies
+        if run(["merge", "--no-edit", "--allow-unrelated-histories", "-X", "ours", remote], in: dir).status == 0 {
+            return true
+        }
+        // -X ours can't auto-resolve modify/delete. Completing the merge with whatever
+        // is in the worktree resurrects a locally-deleted but remotely-edited note —
+        // ponytail: data-safe by design; a lost note beats a wedged repo.
+        run(["add", "-A"], in: dir)
+        guard run(["commit", "--no-edit"], in: dir).status == 0 else {
+            run(["merge", "--abort"], in: dir)
+            return false
+        }
+        return true
+    }
+
+    /// True when every tracked file is still GitPad-generated boilerplate: a `.md`
+    /// whose body, minus a leading `#` heading line, is empty. One typed character fails it.
+    private static func isPristine(_ dir: URL) -> Bool {
+        let files = run(["ls-files"], in: dir).out.split(separator: "\n").map(String.init)
+        for file in files {
+            guard file.hasSuffix(".md") else { return false }
+            let raw = (try? String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)) ?? ""
+            var lines = raw.components(separatedBy: "\n")
+            if lines.first?.hasPrefix("#") == true { lines.removeFirst() }
+            guard lines.joined().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        }
+        return true
+    }
+
+    // MARK: diagnosis (Settings "Fix sync")
+
+    enum SyncProblem: Equatable {
+        case ok, noRemote, offline, sshAuth(key: String), hostKeyChanged, repoMissing, httpsNeedsLogin
+    }
+
+    /// Classify why the remote is unreachable. Blocking — call it off the main thread:
+    /// `ls-remote` can sit for a long time on a routable-but-dead host.
+    static func diagnose(dir: URL) -> SyncProblem {
+        guard !remoteURL(in: dir).isEmpty else { return .noRemote }
+        let r = run(["ls-remote", "origin"], in: dir)
+        guard r.status != 0 else { return .ok }
+        let s = r.out.lowercased()
+        if s.contains("host key verification") || s.contains("host identification has changed") {
+            return .hostKeyChanged
+        }
+        if s.contains("permission denied") || s.contains("publickey") {
+            return .sshAuth(key: offeredSSHKey(in: dir))
+        }
+        if s.contains("terminal prompts disabled") || s.contains("could not read username")
+            || s.contains("authentication failed") {
+            return .httpsNeedsLogin
+        }
+        if s.contains("not found") || s.contains("does not exist") || s.contains("repository") {
+            return .repoMissing
+        }
+        return .offline
+    }
+
+    /// `git@github.com:you/n.git` / `ssh://git@github.com/you/n.git` → `github.com`.
+    static func sshHost(_ url: String) -> String? {
+        if url.hasPrefix("ssh://") {
+            return URL(string: url)?.host
+        }
+        guard url.contains("@"), let at = url.firstIndex(of: "@") else { return nil }
+        let rest = url[url.index(after: at)...]
+        guard let colon = rest.firstIndex(of: ":") else { return nil }
+        return String(rest[..<colon])
+    }
+
+    /// The private key ssh would actually offer this host — names the file the user must fix.
+    static func offeredSSHKey(in dir: URL) -> String {
+        guard let host = sshHost(remoteURL(in: dir)) else { return "~/.ssh/id_ed25519" }
+        let g = exec("/usr/bin/ssh", ["-G", host])
+        let line = g.out.split(separator: "\n").first { $0.hasPrefix("identityfile ") }
+        let path = line.map { String($0.dropFirst("identityfile ".count)) } ?? "~/.ssh/id_ed25519"
+        return NSString(string: path).expandingTildeInPath
+    }
+
+    /// `git@github.com:you/notes.git` → `https://github.com/you/notes.git`.
+    static func httpsURL(from ssh: String) -> String? {
+        guard !ssh.contains("://"), let host = sshHost(ssh), // scp-style only
+              let colon = ssh.firstIndex(of: ":") else { return nil }
+        let path = ssh[ssh.index(after: colon)...]
+        return "https://\(host)/\(path)"
     }
 }
