@@ -30,6 +30,8 @@ final class NoteStore: ObservableObject {
     @Published var screen: Screen = .capture
     // ponytail: per-Mac pins (paths relative to `dir`); move to a .pinned file in the repo if cross-Mac requested
     @Published var pinned: [String] = UserDefaults.standard.stringArray(forKey: "pinned") ?? []
+    /// Set by `delete`, cleared by `undoDelete` — drives the "Note deleted — Undo" banner.
+    @Published var lastDeleted: (original: URL, trashed: URL, pinned: Bool)?
     private var settingsReturn: Screen = .capture
 
     /// Open Settings from any screen, remembering where to return.
@@ -262,10 +264,32 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    /// Delete = move to the macOS Trash (already recoverable), and remember where it went
+    /// so `undoDelete()` can put it straight back. That's why there's no confirmation
+    /// dialog: the slip to protect against is an accidental ⌘⌫, and undo covers it
+    /// without taxing every intentional delete.
     func delete(_ url: URL) {
-        try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        let wasPinned = isPinned(url)
+        var trashed: NSURL?
+        try? FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+        if let t = trashed as URL? { lastDeleted = (original: url, trashed: t, pinned: wasPinned) }
+        if wasPinned { togglePin(url) } // drop the stale pin; undo restores it
         titleCache[url] = nil; contentCache[url] = nil
         refresh()
+    }
+
+    /// Put the last trashed note back where it came from.
+    func undoDelete() {
+        guard let d = lastDeleted else { return }
+        lastDeleted = nil
+        let parent = d.original.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        guard (try? FileManager.default.moveItem(at: d.trashed, to: d.original)) != nil else { return }
+        if d.pinned, !isPinned(d.original) { togglePin(d.original) }
+        refresh()
+        selected = d.original
+        screen = .capture
+        onSaved?() // commit the restore
     }
 
     // MARK: conflict copies (created by GitSync when both machines edit the same note)

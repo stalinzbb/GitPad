@@ -48,6 +48,29 @@ Cross-device sync, an icon that behaves, and setup that explains itself.
 - Docs: `CHANGELOG.md`, `CLAUDE.md`, and `GROWTH.md` added; README architecture,
   shortcuts, and screenshots sections refreshed.
 
+### Readability, chrome & delete UX
+
+- **Fixed: the panel was unreadable over light backgrounds.** It blended
+  `.behindWindow` with only a 0.20-opacity tint — and *no* tint at all on the System
+  theme — so text effectively rendered against the desktop while its color was picked
+  from the window's appearance. Every theme now paints a real surface (~0.92 opaque,
+  System follows the OS window color), so contrast holds over white, dark, or video.
+  macOS **Reduce Transparency** makes it fully opaque.
+- **One chrome icon system.** All nav controls are now a single `ChromeIcon` — identical
+  28×28 container, one glyph size/weight, consistent hover background — so alignment
+  comes from geometry instead of each SF Symbol's optical center. The two heavy glyphs
+  were swapped for symmetric ones: new-note `square.and.pencil` → `plus`, and the busy
+  four-arrow minimize → `minus`.
+- **Roomier editor** — text inset 12×8 → 20×14, plus real leading (1.25 line height,
+  6pt paragraph spacing). The style rides in the highlighter's base attributes, so it
+  survives syntax highlighting instead of resetting as you type.
+- Info-bearing metadata (dates, folders, group headers, sync counts) moved from tertiary
+  to secondary — tertiary is the first thing to fail contrast over a translucent surface.
+- **Undo delete.** Deleting a note shows a self-dismissing "Note deleted — Undo" banner,
+  and there's an Undo Delete item in the Note menu. Restores the file and its pin. No
+  confirmation dialog: delete already goes to the Trash, so undo beats taxing every
+  intentional delete. The folder-delete confirmation stays — that one is destructive.
+
 ### Bug fixes (testing pass)
 
 - Library now has a **New Note** button (next to Back); it creates the note where

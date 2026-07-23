@@ -138,6 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         note.addItem(withTitle: "Save", action: #selector(saveCmd), keyEquivalent: "s")
         let del = note.addItem(withTitle: "Delete Note", action: #selector(deleteNoteCmd), keyEquivalent: "\u{8}")
         del.keyEquivalentModifierMask = .command
+        // no ⌘Z — that belongs to the editor's own text undo
+        note.addItem(withTitle: "Undo Delete", action: #selector(undoDeleteCmd), keyEquivalent: "")
         note.addItem(.separator())
         note.addItem(withTitle: "Minimize to Pill", action: #selector(minimizeCmd), keyEquivalent: "m")
         note.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
@@ -300,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleLibraryCmd() { store.toggleLibrary() }
     @objc func saveCmd() { store.saveNow() }
     @objc func deleteNoteCmd() { store.deleteCurrent() }
+    @objc func undoDeleteCmd() { store.undoDelete() }
     @objc func minimizeCmd() { if !store.pill { store.setPill?(true) } }
 
     @objc func showSettings() {
