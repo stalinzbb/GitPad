@@ -162,8 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // recent notes are inserted just above this item on each open (menuNeedsUpdate)
         revealItem = menu.addItem(withTitle: "Reveal Notes in Finder", action: #selector(revealNotes), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit GitPad", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = menu.addItem(withTitle: "Quit GitPad", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
+        // …except Quit: this menu auto-enables its items, and AppDelegate doesn't implement
+        // terminate: — pointing it at self made AppKit grey the item out. NSApp does.
+        quit.target = NSApp
         menu.delegate = self // refresh the hotkey title + recent notes each time it opens
         statusItem.menu = menu
 
