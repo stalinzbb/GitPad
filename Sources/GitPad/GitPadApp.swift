@@ -134,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         note.autoenablesItems = false // no responder validates our @objc actions → force-enable
         note.addItem(withTitle: "New Note", action: #selector(newNoteCmd), keyEquivalent: "n")
         note.addItem(withTitle: "Library", action: #selector(toggleLibraryCmd), keyEquivalent: "l")
+        note.addItem(withTitle: "Search Notes", action: #selector(searchNotesCmd), keyEquivalent: "k")
         note.addItem(.separator())
         note.addItem(withTitle: "Save", action: #selector(saveCmd), keyEquivalent: "s")
         let del = note.addItem(withTitle: "Delete Note", action: #selector(deleteNoteCmd), keyEquivalent: "\u{8}")
@@ -303,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func newNoteCmd() { store.newNote() }
     @objc func toggleLibraryCmd() { store.toggleLibrary() }
+    @objc func searchNotesCmd() { store.searchNotes() }
     @objc func saveCmd() { store.saveNow() }
     @objc func deleteNoteCmd() { store.deleteCurrent() }
     @objc func undoDeleteCmd() { store.undoDelete() }
