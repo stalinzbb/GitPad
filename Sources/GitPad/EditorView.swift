@@ -419,6 +419,7 @@ struct SettingsView: View {
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
     @State private var remote = ""
+    @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
 
     // (tag, label) — system designs plus Apple-bundled note-friendly fonts.
@@ -578,7 +579,11 @@ struct SettingsView: View {
             let url = GitSync.remoteURL(in: store.dir)
             let ab = GitSync.aheadBehind(in: store.dir)
             DispatchQueue.main.async {
-                if remote.isEmpty { remote = url }
+                // Track the real remote while the field is untouched, so the doctor
+                // switching to HTTPS doesn't leave a stale SSH URL sitting here for
+                // Save/Return to write straight back. Mid-edit text is never clobbered.
+                if remote == shownRemote { remote = url }
+                shownRemote = url
                 aheadBehind = ab
             }
         }
