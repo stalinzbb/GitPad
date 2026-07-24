@@ -2,6 +2,10 @@
 
 **Notes at the speed of thought. Your files, your git, no cloud.**
 
+> **Status: beta.** GitPad works and is used daily, but expect rough edges while
+> the UI settles. Your data is never at risk from app bugs: every note is a plain
+> Markdown file in a git repo you own — nothing is locked in, ever.
+
 GitPad is a menu-bar macOS notes app. Press ⌥Space from anywhere, type, and it
 saves itself — as plain Markdown files in a folder you own. Point it at a private
 git repo and your notes follow you to every Mac. No accounts, no server, no
