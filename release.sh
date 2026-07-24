@@ -39,3 +39,5 @@ ditto -c -k --keepParent GitPad.app "$ZIP"
 
 spctl -a -vv GitPad.app
 echo "Release ready: $(pwd)/$ZIP (v$VERSION, notarized + stapled)"
+echo "SHA-256 (paste into the release notes so users can verify downloads):"
+shasum -a 256 "$ZIP"
