@@ -101,6 +101,17 @@ if CommandLine.arguments.contains("--uitest") {
     precondition(abs(xChecked - xUnchecked) < 0.5, "text shifted on toggle: \(xUnchecked) → \(xChecked)")
     precondition(abs(hChecked - hUnchecked) < 0.5, "line height changed on toggle: \(hUnchecked) → \(hChecked)")
 
+    // A fresh note's empty "# " line must be full H1 height — its glyphs are hidden at
+    // 0.1pt, and without the minimumLineHeight floor the caret collapsed to invisibility
+    (tv, coord) = makeEditor("# ")
+    spin()
+    let hEmptyTitle = tv.layoutManager!.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+    (tv, coord) = makeEditor("# Title")
+    spin()
+    let hFullTitle = tv.layoutManager!.lineFragmentRect(forGlyphAt: 2, effectiveRange: nil).height
+    precondition(abs(hEmptyTitle - hFullTitle) < 1.5,
+                 "empty title line collapsed: \(hEmptyTitle) vs \(hFullTitle)")
+
     // Backspace right after a heading marker drops the title to plain text
     (tv, coord) = makeEditor("# Title\n")
     tv.setSelectedRange(NSRange(location: 2, length: 0))

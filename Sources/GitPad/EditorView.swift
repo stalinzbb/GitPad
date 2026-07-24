@@ -1506,20 +1506,24 @@ struct MarkdownTextView: NSViewRepresentable {
             func checkKern(_ glyph: String) -> CGFloat {
                 checkboxAdvance(f) - (glyph as NSString).size(withAttributes: [.font: tinyFont]).width
             }
-            // headings get air above them; body spacing stays at the shared style's 6pt
-            func headingStyle(_ before: CGFloat) -> NSParagraphStyle {
+            // headings get air above them; body spacing stays at the shared style's 6pt.
+            // minimumLineHeight floors the line at the heading font's height — the hidden
+            // "#{1,3} " marker is 0.1pt, so an empty "# " line (every fresh note) would
+            // otherwise collapse to a ~2pt fragment with an invisible caret.
+            func headingStyle(_ before: CGFloat, _ hFont: NSFont) -> NSParagraphStyle {
                 let p = Self.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
                 p.paragraphSpacingBefore = before
+                p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: hFont) * 1.25).rounded()
                 return p
             }
+            // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
+            let h1 = Self.bold(Self.baseFont(fontSize + 8, design))
+            let h2 = Self.bold(Self.baseFont(fontSize + 4, design))
+            let h3 = Self.bold(Self.baseFont(fontSize + 2, design))
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
-                // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
-                (re(#"^# .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 8, design)),
-                                  .paragraphStyle: headingStyle(14)]),
-                (re(#"^## .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 4, design)),
-                                   .paragraphStyle: headingStyle(10)]),
-                (re(#"^### .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 2, design)),
-                                    .paragraphStyle: headingStyle(8)]),
+                (re(#"^# .*$"#), [.font: h1, .paragraphStyle: headingStyle(14, h1)]),
+                (re(#"^## .*$"#), [.font: h2, .paragraphStyle: headingStyle(10, h2)]),
+                (re(#"^### .*$"#), [.font: h3, .paragraphStyle: headingStyle(8, h3)]),
                 // hide the hash marks entirely so headers read as rendered titles
                 // (no lookahead: a bare "# " collapses immediately, so the line never
                 // jumps left when the first title character lands)
@@ -1847,7 +1851,11 @@ struct MarkdownTextView: NSViewRepresentable {
             rect.origin.x += tv.textContainerOrigin.x
             rect.origin.y += tv.textContainerOrigin.y
             guard rect.width > 0, rect.height > 0 else { return }
-            actionPopover.show(relativeTo: rect, of: tv, preferredEdge: .maxY)
+            // .maxY renders the bar ABOVE the selection — fine low in the window, but for
+            // text near the top it juts outside the borderless panel. Flip to below when
+            // the selection sits in the upper half of the visible viewport.
+            let below = rect.midY < tv.visibleRect.midY // flipped coords: smaller y = higher
+            actionPopover.show(relativeTo: rect, of: tv, preferredEdge: below ? .minY : .maxY)
         }
 
         func wrap(_ mark: String) {
