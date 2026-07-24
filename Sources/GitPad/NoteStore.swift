@@ -538,8 +538,9 @@ final class NoteStore: ObservableObject {
     // MARK: load/save — files keep standard markdown; the editor shows ☐/☑ glyphs
 
     static func fromMarkdown(_ s: String) -> String {
-        s.replacingOccurrences(of: #"(?m)^(\s*)- \[ \] "#, with: "$1☐ ", options: .regularExpression)
-         .replacingOccurrences(of: #"(?m)^(\s*)- \[x\] "#, with: "$1☑ ", options: .regularExpression)
+        // tolerant on read (`* [X]` from other editors); toMarkdown writes canonical `- [ ]`/`- [x]`
+        s.replacingOccurrences(of: #"(?m)^(\s*)[-*+] \[ \] "#, with: "$1☐ ", options: .regularExpression)
+         .replacingOccurrences(of: #"(?m)^(\s*)[-*+] \[[xX]\] "#, with: "$1☑ ", options: .regularExpression)
     }
 
     static func toMarkdown(_ s: String) -> String {

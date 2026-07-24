@@ -33,6 +33,17 @@ gotchas, and things that would surprise a contributor._
   undo covers exactly that. There is deliberately **no Archive folder** — folders + "Move to"
   already do that job. The folder-delete alert stays: it touches many notes at once.
 - **Sync never blocks writing.** `GitSync.sync` does a clean merge first (with `--allow-unrelated-histories`, since a repo created with a README has history unrelated to our fresh `init`), then falls back to conflict copies + `-X ours`. See `GitSync.swift` comments.
+- **List rendering is a display pipeline over untouched CommonMark.** Disk keeps `- ` bullets
+  and `1. 2. 3.` ordinals at every depth. The editor clears the source marker's color and tags
+  it with `markerKey`; `DividerLayoutManager` draws the display marker (• ◦ ▪ / `1.` `a.` `i.`
+  by depth) right-aligned to the source marker's trailing edge, so caret/content positions
+  never move even though `iii.` is wider than `3.`. Hanging indents come from per-paragraph
+  styles built in `applyListLayout` (cached per depth+prefix width). Ordered lists renumber in
+  a deferred pass (`renumberListBlock`, pure logic in `ListLogic.renumber`) that runs from
+  `didProcessEditing` — so Enter/Tab/Backspace/paste/undo all renumber without per-command code.
+- **`typingAttributes` are set explicitly** (from paragraph context, in `refreshTypingAttributes`).
+  NSTextView otherwise derives them from the character before the caret — right after a hidden
+  `# ` marker that's `clear` + 0.1pt, which made the first typed character invisible for a frame.
 
 ## Gotchas / known issues
 

@@ -450,6 +450,7 @@ struct SettingsView: View {
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
     @State private var remote = ""
+    @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
 
     // (tag, label) — system designs plus Apple-bundled note-friendly fonts.
@@ -579,6 +580,16 @@ struct SettingsView: View {
                     Text("Changes apply immediately — there's no Save button.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section {
+                    Button(role: .destructive) {
+                        NSApp.terminate(nil)
+                    } label: {
+                        Label("Quit GitPad", systemImage: "power")
+                    }
+                } footer: {
+                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
@@ -609,7 +620,11 @@ struct SettingsView: View {
             let url = GitSync.remoteURL(in: store.dir)
             let ab = GitSync.aheadBehind(in: store.dir)
             DispatchQueue.main.async {
-                if remote.isEmpty { remote = url }
+                // Track the real remote while the field is untouched, so the doctor
+                // switching to HTTPS doesn't leave a stale SSH URL sitting here for
+                // Save/Return to write straight back. Mid-edit text is never clobbered.
+                if remote == shownRemote { remote = url }
+                shownRemote = url
                 aheadBehind = ab
             }
         }
@@ -1244,6 +1259,83 @@ struct NoteRow: View {
 
 private let dividerKey = NSAttributedString.Key("gitpadDivider")
 private let checkboxKey = NSAttributedString.Key("gitpadCheckbox") // value: Bool (checked)
+private let markerKey = NSAttributedString.Key("gitpadListMarker") // value: String (display marker)
+
+/// Drawn checkbox size and the fixed layout advance the ☐/☑ character occupies, derived
+/// from the body font. ☐/☑ aren't in SF Pro — fallback fonts (☑ often gets the emoji
+/// font!) have wildly different advances and line metrics, which shifted the text and line
+/// height between the unchecked, typed, and checked states. The glyph is laid out at 0.1pt
+/// with a kern of exactly `checkboxAdvance`, so both states occupy identical space and the
+/// drawn box is the single source of truth. The advance exceeds the box side by a gap so
+/// the label doesn't crowd the box (the space character alone was too tight).
+private func checkboxSide(_ f: NSFont) -> CGFloat { (f.capHeight * 1.45).rounded() }
+private func checkboxAdvance(_ f: NSFont) -> CGFloat { checkboxSide(f) + (f.pointSize * 0.3).rounded() }
+
+/// Pure list logic: parsing, renumbering, and display markers. Disk stays CommonMark
+/// (`- ` bullets, `1. 2. 3.` ordinals at every depth); letters/romans and •/◦/▪ are
+/// display-layer only, drawn by DividerLayoutManager over cleared text.
+enum ListLogic {
+    /// 1=indent  2=bullet/checkbox  3=number  4=content
+    static let listRegex = try! NSRegularExpression(
+        pattern: #"^(\s*)(?:([-*+☐☑]) |(\d+)\. )(.*)$"#)
+
+    static func match(_ line: String) -> NSTextCheckingResult? {
+        listRegex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length))
+    }
+
+    static func letterLabel(_ n: Int) -> String { // 1 → a, 27 → aa
+        var n = n, s = ""
+        while n > 0 { n -= 1; s = String(UnicodeScalar(UInt8(97 + n % 26))) + s; n /= 26 }
+        return s
+    }
+
+    static func romanLabel(_ n: Int) -> String {
+        guard n > 0 else { return "\(n)" }
+        let pairs: [(Int, String)] = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+                                      (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
+                                      (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+        var n = n, s = ""
+        for (v, r) in pairs { while n >= v { s += r; n -= v } }
+        return s
+    }
+
+    /// Ordered: 1. → a. → i. by depth; bullets: • → ◦ → ▪ (cycling every 3 levels).
+    static func displayMarker(number: Int?, depth: Int) -> String {
+        if let n = number {
+            switch depth % 3 {
+            case 1: return letterLabel(n) + "."
+            case 2: return romanLabel(n) + "."
+            default: return "\(n)."
+            }
+        }
+        switch depth % 3 {
+        case 1: return "◦"
+        case 2: return "▪"
+        default: return "•"
+        }
+    }
+
+    /// Rewrites ordinals so every ordered run counts 1, 2, 3… per depth. A non-list
+    /// line breaks all runs; a bullet/checkbox breaks the run at its own depth;
+    /// dedenting past a depth resets the deeper counters.
+    static func renumber(_ lines: [String]) -> [String] {
+        var counters: [Int: Int] = [:] // depth → last ordinal
+        return lines.map { line in
+            guard let m = match(line) else { counters.removeAll(); return line }
+            let ns = line as NSString
+            let depth = ns.substring(with: m.range(at: 1)).count / 2
+            counters = counters.filter { $0.key <= depth }
+            guard m.range(at: 3).location != NSNotFound else {
+                counters[depth] = 0
+                return line
+            }
+            let n = (counters[depth] ?? 0) + 1
+            counters[depth] = n
+            let numR = m.range(at: 3)
+            return ns.substring(with: numR) == "\(n)" ? line : ns.replacingCharacters(in: numR, with: "\(n)")
+        }
+    }
+}
 
 struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
@@ -1297,7 +1389,10 @@ struct MarkdownTextView: NSViewRepresentable {
         }
         if tv.string != text {
             tv.string = text
-            if text == "# " { tv.setSelectedRange(NSRange(location: 2, length: 0)) } // fresh note: caret after title marker
+            if text == "# " { // fresh note: caret after the title marker, keyboard ready to type
+                tv.setSelectedRange(NSRange(location: 2, length: 0))
+                DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
+            }
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
     }
@@ -1329,21 +1424,6 @@ struct MarkdownTextView: NSViewRepresentable {
             return p
         }()
 
-        private static let listIndentRegex = try! NSRegularExpression(
-            pattern: #"^( *)(?:[-*+☐☑] |\d+\. )"#, options: [.anchorsMatchLines])
-
-        /// Per-depth copy of `paragraphStyle` (so leading and spacing carry over), cached
-        /// because every keystroke re-highlights the paragraph.
-        private static var indentStyles: [Int: NSParagraphStyle] = [:]
-        private static func indentStyle(_ depth: Int) -> NSParagraphStyle {
-            if let s = indentStyles[depth] { return s }
-            let p = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
-            p.firstLineHeadIndent = CGFloat(depth) * 14
-            p.headIndent = CGFloat(depth) * 14 + 18 // wrapped text lines up past the marker
-            indentStyles[depth] = p
-            return p
-        }
-
         // MARK: fonts
         static func baseFont(_ size: CGFloat, _ design: String) -> NSFont {
             switch design {
@@ -1372,11 +1452,89 @@ struct MarkdownTextView: NSViewRepresentable {
         // MARK: paragraph-scoped highlighting
         func textStorage(_ storage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                          range editedRange: NSRange, changeInLength delta: Int) {
-            // Synchronous: hopping to the next runloop left one frame of unstyled text, which
-            // read as the line jumping while you typed. Re-entry is already covered — our own
-            // attribute edits come back with `.editedAttributes`, not `.editedCharacters`.
+            // Deferred on purpose: layout-affecting attribute edits (kern, fonts) made
+            // synchronously inside didProcessEditing leave stale glyph advances on the
+            // initial full-document pass, and renumbering mutates text — illegal here.
+            // Typed characters don't flash meanwhile because typingAttributes are set
+            // explicitly (refreshTypingAttributes).
             guard editedMask.contains(.editedCharacters) else { return }
-            highlight(storage, range: (storage.string as NSString).paragraphRange(for: editedRange))
+            let loc = min(editedRange.location, storage.length)
+            let safe = NSRange(location: loc, length: min(editedRange.length, storage.length - loc))
+            let para = (storage.string as NSString).paragraphRange(for: safe)
+            DispatchQueue.main.async { [weak self, weak storage] in
+                guard let self, let storage else { return }
+                var range = para
+                if let tv = self.textView, !self.isRenumbering, !tv.hasMarkedText() {
+                    self.isRenumbering = true
+                    self.renumberListBlock(tv, around: para.location)
+                    self.isRenumbering = false
+                    // renumbering may have shifted lengths; re-clamp, keeping the full span —
+                    // an Enter edit covers TWO paragraphs (split line + new line), and collapsing
+                    // to one left the new line unstyled (raw "2."/"☐") until the next keystroke
+                    let ns = storage.string as NSString
+                    let loc = min(para.location, ns.length)
+                    let len = min(para.length, ns.length - loc)
+                    range = ns.paragraphRange(for: NSRange(location: loc, length: len))
+                }
+                self.highlight(storage, range: range)
+            }
+        }
+
+        private var isRenumbering = false
+
+        /// One pass over the contiguous list block around the edit — covers Enter, Tab,
+        /// Backspace, paste, and undo without per-command bookkeeping. Only ordinals that
+        /// actually differ are rewritten; the changed lines re-highlight via their own
+        /// didProcessEditing round (a fixpoint: the second pass changes nothing).
+        private func renumberListBlock(_ tv: NSTextView, around loc: Int) {
+            guard let storage = tv.textStorage else { return }
+            let ns = tv.string as NSString
+            guard ns.length > 0 else { return }
+            let anchor = ns.paragraphRange(for: NSRange(location: min(loc, ns.length), length: 0))
+            func isList(_ r: NSRange) -> Bool {
+                ListLogic.match(ns.substring(with: r)) != nil
+            }
+            var start = anchor.location
+            while start > 0 {
+                let prev = ns.paragraphRange(for: NSRange(location: start - 1, length: 0))
+                guard isList(prev) else { break }
+                start = prev.location
+            }
+            var end = anchor.location + anchor.length
+            while end < ns.length {
+                let next = ns.paragraphRange(for: NSRange(location: end, length: 0))
+                guard isList(next) else { break }
+                end = next.location + next.length
+            }
+            let block = NSRange(location: start, length: end - start)
+            guard block.length > 0 else { return }
+
+            var lineRanges: [NSRange] = []
+            var lines: [String] = []
+            ns.enumerateSubstrings(in: block, options: [.byParagraphs]) { sub, subR, _, _ in
+                lineRanges.append(subR)
+                lines.append(sub ?? "")
+            }
+            let fixed = ListLogic.renumber(lines)
+            var edits: [(NSRange, String)] = [] // number subrange in storage coords → new digits
+            for (i, new) in fixed.enumerated() where new != lines[i] {
+                guard let m = ListLogic.match(lines[i]), m.range(at: 3).location != NSNotFound,
+                      let f = ListLogic.match(new), f.range(at: 3).location != NSNotFound else { continue }
+                let numR = NSRange(location: lineRanges[i].location + m.range(at: 3).location,
+                                   length: m.range(at: 3).length)
+                edits.append((numR, (new as NSString).substring(with: f.range(at: 3))))
+            }
+            guard !edits.isEmpty else { return }
+
+            let sel = tv.selectedRange()
+            var delta = 0
+            for (r, s) in edits.reversed() { // back-to-front keeps earlier offsets valid
+                guard tv.shouldChangeText(in: r, replacementString: s) else { continue }
+                storage.replaceCharacters(in: r, with: s)
+                tv.didChangeText()
+                if r.location < sel.location { delta += (s as NSString).length - r.length }
+            }
+            tv.setSelectedRange(NSRange(location: max(0, sel.location + delta), length: sel.length))
         }
 
         private var cachedRules: (size: CGFloat, design: String, theme: String,
@@ -1395,30 +1553,54 @@ struct MarkdownTextView: NSViewRepresentable {
             let f = Self.baseFont(fontSize, design)
             let base: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.labelColor,
                                                        .paragraphStyle: Self.paragraphStyle]
+            let tinyFont = NSFont.systemFont(ofSize: 0.1)
+            func checkKern(_ glyph: String) -> CGFloat {
+                checkboxAdvance(f) - (glyph as NSString).size(withAttributes: [.font: tinyFont]).width
+            }
+            // headings get air above them; body spacing stays at the shared style's 6pt.
+            // minimumLineHeight floors the line at the heading font's height — the hidden
+            // "#{1,3} " marker is 0.1pt, so an empty "# " line (every fresh note) would
+            // otherwise collapse to a ~2pt fragment with an invisible caret.
+            func headingStyle(_ before: CGFloat, _ hFont: NSFont) -> NSParagraphStyle {
+                let p = Self.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+                p.paragraphSpacingBefore = before
+                p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: hFont) * 1.25).rounded()
+                return p
+            }
+            // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
+            let h1 = Self.bold(Self.baseFont(fontSize + 8, design))
+            let h2 = Self.bold(Self.baseFont(fontSize + 4, design))
+            let h3 = Self.bold(Self.baseFont(fontSize + 2, design))
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
-                // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
-                (re(#"^# .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 8, design))]),
-                (re(#"^## .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 4, design))]),
-                (re(#"^### .*$"#), [.font: Self.bold(Self.baseFont(fontSize + 2, design))]),
+                (re(#"^# .*$"#), [.font: h1, .paragraphStyle: headingStyle(14, h1)]),
+                (re(#"^## .*$"#), [.font: h2, .paragraphStyle: headingStyle(10, h2)]),
+                (re(#"^### .*$"#), [.font: h3, .paragraphStyle: headingStyle(8, h3)]),
                 // hide the hash marks entirely so headers read as rendered titles
-                (re(#"^#{1,3} (?=\S)"#), [.foregroundColor: NSColor.clear,
-                                          .font: NSFont.systemFont(ofSize: 0.1)]),
+                // (no lookahead: a bare "# " collapses immediately, so the line never
+                // jumps left when the first title character lands)
+                (re(#"^#{1,3} "#), [.foregroundColor: NSColor.clear,
+                                    .font: NSFont.systemFont(ofSize: 0.1)]),
                 (re(#"\*\*[^*\n]+\*\*"#), [.font: Self.bold(f)]),
                 (re(#"(?<!\*)\*[^*\n]+\*(?!\*)"#), [.obliqueness: 0.15]),
                 (re(#"~~[^~\n]+~~"#), [.strikethroughStyle: NSUnderlineStyle.single.rawValue]),
                 (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular),
                                      .foregroundColor: theme.code]),
-                (re(#"^\s*(?:[-*+] |\d+\. )"#), [.foregroundColor: NSColor.secondaryLabelColor]),
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
                 (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
                                       .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
-                // hide the raw glyph; DividerLayoutManager draws a real checkbox at its rect
-                (re(#"☐"#), [.foregroundColor: NSColor.clear, checkboxKey: false]),
-                (re(#"☑"#), [.foregroundColor: NSColor.clear, checkboxKey: true]),
+                // hide the raw glyph AND neutralize its fallback-font layout: 0.1pt font +
+                // a kern that pins the advance to the drawn box width, so ☐ and ☑ occupy
+                // identical space (no text shift or line-height jump on toggle/typing)
+                (re(#"☐"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
+                             .kern: checkKern("☐"), checkboxKey: false]),
+                (re(#"☑"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
+                             .kern: checkKern("☑"), checkboxKey: true]),
                 // dashes hidden; DividerLayoutManager draws a full-width rule instead
                 (re(#"^\s*[-—]{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
             ]
             cachedRules = (fontSize, design, themeID, base, list)
+            listStyleCache.removeAll()
+            prefixWidthCache.removeAll()
             return (base, list)
         }
 
@@ -1433,16 +1615,92 @@ struct MarkdownTextView: NSViewRepresentable {
                     if let r = match?.range { storage.addAttributes(attrs, range: r) }
                 }
             }
-            // Nesting has to be visible, or Tab looks like it did nothing: indent each list
-            // line by its depth, and hang wrapped lines past the marker.
-            let ns = storage.string as NSString
-            Self.listIndentRegex.enumerateMatches(in: storage.string, range: range) { match, _, _ in
-                guard let m = match else { return }
-                let depth = m.range(at: 1).length / 2 // Tab inserts two spaces per level
-                storage.addAttribute(.paragraphStyle, value: Self.indentStyle(depth),
-                                     range: ns.paragraphRange(for: m.range))
-            }
+            applyListLayout(storage, in: range)
             storage.endEditing()
+            if let tv = textView { refreshTypingAttributes(tv) }
+        }
+
+        // MARK: list layout — hanging indents + display markers
+        private var listStyleCache: [String: NSParagraphStyle] = [:]
+        private var prefixWidthCache: [String: CGFloat] = [:]
+
+        /// Per list paragraph: a hanging indent so wrapped lines align under the content
+        /// (not the margin), a real per-depth visual indent (2 literal spaces alone are
+        /// ~7pt — invisible), and a display marker (• ◦ ▪ / 1. a. i.) drawn by the layout
+        /// manager over the cleared source marker. Disk text is untouched.
+        private func applyListLayout(_ storage: NSTextStorage, in range: NSRange) {
+            let ns = storage.string as NSString
+            let font = Self.baseFont(fontSize, design)
+            let unit = (fontSize * 1.5).rounded() // extra indent per nest level
+            ns.enumerateSubstrings(in: range, options: [.byParagraphs]) { sub, subR, _, _ in
+                guard let line = sub, let m = ListLogic.match(line) else { return }
+                let lineNS = line as NSString
+                let depth = lineNS.substring(with: m.range(at: 1)).count / 2
+                let prefix = lineNS.substring(to: m.range(at: 4).location) // indent + marker + " "
+
+                let width: CGFloat
+                if let w = self.prefixWidthCache[prefix] { width = w } else {
+                    let marker = m.range(at: 2).location != NSNotFound
+                        ? lineNS.substring(with: m.range(at: 2)) : ""
+                    if marker == "☐" || marker == "☑" {
+                        // the glyph's layout advance is pinned to checkboxAdvance, not its
+                        // fallback-font width — measure the rest and add the pinned advance
+                        let rest = lineNS.substring(with: m.range(at: 1)) + " "
+                        width = (rest as NSString).size(withAttributes: [.font: font]).width
+                            + checkboxAdvance(font)
+                    } else {
+                        width = (prefix as NSString).size(withAttributes: [.font: font]).width
+                    }
+                    self.prefixWidthCache[prefix] = width
+                }
+                let key = "\(depth)|\(width)"
+                let style: NSParagraphStyle
+                if let s = self.listStyleCache[key] { style = s } else {
+                    let p = NSMutableParagraphStyle()
+                    p.lineHeightMultiple = 1.25
+                    p.paragraphSpacing = 2 // tighter inside lists; same for bullets and numbers
+                    p.firstLineHeadIndent = CGFloat(depth) * unit
+                    p.headIndent = p.firstLineHeadIndent + width // wrap under the content
+                    self.listStyleCache[key] = p
+                    style = p
+                }
+                storage.addAttribute(.paragraphStyle, value: style, range: subR)
+
+                // bullets and numbers get a drawn display marker; checkboxes are drawn already
+                let bulletR = m.range(at: 2)
+                let numberR = m.range(at: 3)
+                if numberR.location != NSNotFound {
+                    let n = Int(lineNS.substring(with: numberR)) ?? 0
+                    let markerR = NSRange(location: subR.location + numberR.location,
+                                          length: numberR.length + 1) // digits + "."
+                    storage.addAttributes([.foregroundColor: NSColor.clear,
+                                           markerKey: ListLogic.displayMarker(number: n, depth: depth)],
+                                          range: markerR)
+                } else if bulletR.location != NSNotFound {
+                    let marker = lineNS.substring(with: bulletR)
+                    if marker != "☐" && marker != "☑" {
+                        let markerR = NSRange(location: subR.location + bulletR.location, length: bulletR.length)
+                        storage.addAttributes([.foregroundColor: NSColor.clear,
+                                               markerKey: ListLogic.displayMarker(number: nil, depth: depth)],
+                                              range: markerR)
+                    }
+                }
+            }
+        }
+
+        /// NSTextView derives typingAttributes from the character before the caret — right
+        /// after a hidden marker that's clear + 0.1pt, so the first character typed was
+        /// invisible for a frame. Set them explicitly from the paragraph context instead.
+        func refreshTypingAttributes(_ tv: NSTextView) {
+            let (base, _) = rules()
+            var attrs = base
+            let ns = tv.string as NSString
+            let caret = min(tv.selectedRange().location, ns.length)
+            let line = ns.substring(with: ns.lineRange(for: NSRange(location: caret, length: 0)))
+            if line.hasPrefix("# ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 8, design)) }
+            else if line.hasPrefix("## ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 4, design)) }
+            else if line.hasPrefix("### ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 2, design)) }
+            tv.typingAttributes = attrs
         }
 
         // MARK: auto list continuation
@@ -1450,46 +1708,67 @@ struct MarkdownTextView: NSViewRepresentable {
             if selector == #selector(NSResponder.insertNewline(_:)) { return continueList(tv) }
             if selector == #selector(NSResponder.insertTab(_:)) { return indentList(tv, out: false) }
             if selector == #selector(NSResponder.insertBacktab(_:)) { return indentList(tv, out: true) }
+            if selector == #selector(NSResponder.deleteBackward(_:)) { return smartDeleteBackward(tv) }
             return false
         }
 
-        private static let listRegex = try! NSRegularExpression(
-            pattern: #"^(\s*)(?:([-*+☐☑]) |(\d+)\. )(.*)$"#)
+        /// Replace `r` with `s` through the undo-aware channel, WITHOUT the caret-moves-to-
+        /// end-of-insertion behavior of insertText(_:replacementRange:).
+        private func replaceText(_ tv: NSTextView, _ r: NSRange, _ s: String) -> Bool {
+            guard tv.shouldChangeText(in: r, replacementString: s), let storage = tv.textStorage else { return false }
+            storage.replaceCharacters(in: r, with: s)
+            tv.didChangeText()
+            return true
+        }
 
-        /// Tab / Shift-Tab nest list items by two spaces per level. Only list lines in the
-        /// selection are touched; a non-list line falls through to a normal tab (return false).
-        /// Markdown nests via leading whitespace and `to/fromMarkdown` preserves it, so this
-        /// round-trips with no NoteStore change.
-        // ponytail: no numbered-list renumbering on nesting; add if anyone notices.
+        /// Tab / Shift-Tab nest list items by two spaces per level. Caret and selection are
+        /// preserved (mapped through the edits), so repeated Tab on a block works. Markdown
+        /// nests via leading whitespace and `to/fromMarkdown` preserves it. Tab never emits
+        /// a literal \t — that's an indented code block in Markdown on disk.
         private func indentList(_ tv: NSTextView, out: Bool) -> Bool {
             let ns = tv.string as NSString
-            let span = ns.lineRange(for: tv.selectedRange())
+            let sel = tv.selectedRange()
+            var scan = sel
+            if scan.length > 0, ns.lineRange(for: NSRange(location: scan.location + scan.length, length: 0))
+                .location == scan.location + scan.length {
+                scan.length -= 1 // selection ends exactly at a line start → don't drag that line in
+            }
+            let span = ns.lineRange(for: scan)
             var starts: [Int] = [] // line starts that are list items (span may be one empty line)
             var i = span.location
             repeat {
                 let lr = ns.lineRange(for: NSRange(location: i, length: 0))
-                let line = ns.substring(with: lr) as NSString
-                if Self.listRegex.firstMatch(in: line as String,
-                        range: NSRange(location: 0, length: line.length)) != nil {
-                    starts.append(lr.location)
-                }
+                if ListLogic.match(ns.substring(with: lr)) != nil { starts.append(lr.location) }
                 i = lr.location + lr.length
             } while i < span.location + span.length
-            guard !starts.isEmpty else { return false } // nothing list-shaped → default tab
+            if starts.isEmpty {
+                guard !out else { return true } // shift-tab outside a list: no-op
+                tv.insertText("  ", replacementRange: sel) // plain tab → two spaces
+                return true
+            }
 
-            // edit back-to-front so earlier line starts stay valid as we mutate
-            for start in starts.sorted(by: >) {
+            tv.undoManager?.beginUndoGrouping()
+            var edits: [(Int, Int)] = [] // (line start, char delta)
+            for start in starts.sorted(by: >) { // back-to-front keeps earlier offsets valid
                 if !out {
-                    tv.insertText("  ", replacementRange: NSRange(location: start, length: 0))
+                    if replaceText(tv, NSRange(location: start, length: 0), "  ") { edits.append((start, 2)) }
                 } else if start < ns.length, ns.substring(with: NSRange(location: start, length: 1)) == "\t" {
-                    tv.insertText("", replacementRange: NSRange(location: start, length: 1))
+                    if replaceText(tv, NSRange(location: start, length: 1), "") { edits.append((start, -1)) }
                 } else {
                     var n = 0 // strip up to two leading spaces
                     while n < 2, start + n < ns.length,
                           ns.substring(with: NSRange(location: start + n, length: 1)) == " " { n += 1 }
-                    if n > 0 { tv.insertText("", replacementRange: NSRange(location: start, length: n)) }
+                    if n > 0, replaceText(tv, NSRange(location: start, length: n), "") { edits.append((start, -n)) }
                 }
             }
+            tv.undoManager?.endUndoGrouping()
+
+            var mapped = sel // map the original selection through the edits
+            for (loc, d) in edits {
+                if loc <= mapped.location { mapped.location = max(mapped.location + d, loc) }
+                else if loc < mapped.location + mapped.length { mapped.length = max(mapped.length + d, 0) }
+            }
+            tv.setSelectedRange(mapped)
             return true
         }
 
@@ -1499,11 +1778,17 @@ struct MarkdownTextView: NSViewRepresentable {
             let lineR = ns.lineRange(for: NSRange(location: min(caret, ns.length), length: 0))
             let upToCaret = ns.substring(with: NSRange(location: lineR.location, length: caret - lineR.location))
             let lineNS = upToCaret as NSString
-            guard let m = Self.listRegex.firstMatch(in: upToCaret,
-                    range: NSRange(location: 0, length: lineNS.length)) else { return false }
+            guard let m = ListLogic.match(upToCaret) else { return false }
             let content = lineNS.substring(with: m.range(at: 4))
             if content.isEmpty {
-                tv.insertText("", replacementRange: NSRange(location: lineR.location, length: caret - lineR.location))
+                let indent = lineNS.substring(with: m.range(at: 1))
+                if indent.count >= 2 { // nested empty item: outdent one level, keep the marker
+                    if replaceText(tv, NSRange(location: lineR.location, length: 2), "") {
+                        tv.setSelectedRange(NSRange(location: caret - 2, length: 0))
+                    }
+                } else { // top level: exit the list
+                    tv.insertText("", replacementRange: NSRange(location: lineR.location, length: caret - lineR.location))
+                }
                 return true
             }
             var prefix = lineNS.substring(with: m.range(at: 1))
@@ -1514,6 +1799,35 @@ struct MarkdownTextView: NSViewRepresentable {
                 prefix += (marker == "☐" || marker == "☑") ? "☐ " : marker + " "
             }
             tv.insertText("\n" + prefix, replacementRange: tv.selectedRange())
+            return true
+        }
+
+        static let headingPrefix = try! NSRegularExpression(pattern: #"^#{1,3} "#)
+
+        /// Backspace with the caret right after a list or heading marker removes the whole
+        /// marker in one go (Notes-style) — a title drops back to plain text instead of
+        /// leaving a stray "#", and a stripped ☐ never lingers invisibly.
+        private func smartDeleteBackward(_ tv: NSTextView) -> Bool {
+            let sel = tv.selectedRange()
+            guard sel.length == 0, sel.location > 0 else { return false }
+            let ns = tv.string as NSString
+            let lineR = ns.lineRange(for: NSRange(location: min(sel.location, ns.length), length: 0))
+            let line = ns.substring(with: lineR)
+            if let h = Self.headingPrefix.firstMatch(in: line,
+                    range: NSRange(location: 0, length: (line as NSString).length)),
+               sel.location == lineR.location + h.range.length {
+                let r = NSRange(location: lineR.location, length: h.range.length)
+                if replaceText(tv, r, "") { tv.setSelectedRange(NSRange(location: lineR.location, length: 0)) }
+                return true
+            }
+            guard let m = ListLogic.match(line) else { return false }
+            let contentStart = lineR.location + m.range(at: 4).location
+            guard sel.location == contentStart else { return false }
+            let markerLoc = m.range(at: 2).location != NSNotFound ? m.range(at: 2).location
+                                                                  : m.range(at: 3).location
+            let r = NSRange(location: lineR.location + markerLoc,
+                            length: m.range(at: 4).location - markerLoc)
+            if replaceText(tv, r, "") { tv.setSelectedRange(NSRange(location: r.location, length: 0)) }
             return true
         }
 
@@ -1565,6 +1879,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // MARK: highlight-to-actions mini toolbar
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
+            refreshTypingAttributes(tv)
             if tv.selectedRange().length == 0 {
                 actionPopover.performClose(nil)
                 return
@@ -1574,7 +1889,7 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         @objc private func showActions() {
-            guard let tv = textView, tv.selectedRange().length > 0,
+            guard let tv = textView, tv.window != nil, tv.selectedRange().length > 0,
                   NSEvent.pressedMouseButtons == 0,
                   let lm = tv.layoutManager, let tc = tv.textContainer else { return }
             if actionPopover.contentViewController == nil {
@@ -1587,7 +1902,11 @@ struct MarkdownTextView: NSViewRepresentable {
             rect.origin.x += tv.textContainerOrigin.x
             rect.origin.y += tv.textContainerOrigin.y
             guard rect.width > 0, rect.height > 0 else { return }
-            actionPopover.show(relativeTo: rect, of: tv, preferredEdge: .maxY)
+            // .maxY renders the bar ABOVE the selection — fine low in the window, but for
+            // text near the top it juts outside the borderless panel. Flip to below when
+            // the selection sits in the upper half of the visible viewport.
+            let below = rect.midY < tv.visibleRect.midY // flipped coords: smaller y = higher
+            actionPopover.show(relativeTo: rect, of: tv, preferredEdge: below ? .minY : .maxY)
         }
 
         func wrap(_ mark: String) {
@@ -1604,7 +1923,17 @@ struct MarkdownTextView: NSViewRepresentable {
             let para = ns.paragraphRange(for: tv.selectedRange())
             let lines = ns.substring(with: para)
                 .components(separatedBy: "\n")
-                .map { $0.isEmpty || $0.hasPrefix("☐ ") ? $0 : "☐ " + $0 }
+                .map { line -> String in
+                    guard !line.isEmpty else { return line }
+                    // an existing list marker converts in place (was: "☐ - foo"); checkboxes stay
+                    if let m = ListLogic.match(line) {
+                        let lns = line as NSString
+                        let marker = m.range(at: 2).location != NSNotFound ? lns.substring(with: m.range(at: 2)) : ""
+                        if marker == "☐" || marker == "☑" { return line }
+                        return lns.substring(with: m.range(at: 1)) + "☐ " + lns.substring(with: m.range(at: 4))
+                    }
+                    return "☐ " + line
+                }
                 .joined(separator: "\n")
             tv.insertText(lines, replacementRange: para)
             actionPopover.performClose(nil)
@@ -1660,17 +1989,48 @@ final class DividerLayoutManager: NSLayoutManager {
             // Size from the text's cap height and sit the box ON the baseline, not on the
             // line-fragment's midY — the fragment is inflated by lineHeightMultiple, so the
             // old boundingRect box floated and drifted with font/size.
-            let font = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+            // the glyph itself is 0.1pt; size the box from the body text right after it,
+            // matching the kerned advance the glyph was pinned to (see checkboxAdvance)
+            var font = (storage.attribute(.font, at: min(range.location + 1, storage.length - 1),
+                                          effectiveRange: nil) as? NSFont)
                 ?? .systemFont(ofSize: NSFont.systemFontSize)
+            if font.pointSize < 1 { font = .systemFont(ofSize: NSFont.systemFontSize) }
             let frag = lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
             let loc = location(forGlyphAt: gr.location) // glyph offset within its fragment
             let baselineY = frag.minY + loc.y + origin.y
-            let side = (font.capHeight * 1.2).rounded()
-            // flipped space: smaller y is higher, so the box spans cap height ABOVE the baseline.
+            let side = checkboxSide(font)
+            // flipped space: smaller y is higher. The box is taller than the cap height, so
+            // center it on the cap band — it dips slightly below the baseline like a native
+            // checkbox instead of towering above the text.
             // frag.minX + loc.x is the glyph's left edge → indented checkboxes stay aligned.
-            let box = NSRect(x: frag.minX + loc.x + origin.x, y: baselineY - side,
+            let box = NSRect(x: frag.minX + loc.x + origin.x,
+                             y: baselineY - side + ((side - font.capHeight) / 2).rounded(),
                              width: side, height: side)
             drawCheckbox(in: box, checked: checked)
+        }
+
+        storage.enumerateAttribute(markerKey, in: charRange) { value, range, _ in
+            guard let display = value as? String else { return }
+            let gr = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let font = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+                ?? .systemFont(ofSize: NSFont.systemFontSize)
+            let frag = lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
+            let loc = location(forGlyphAt: gr.location)
+            // right-align to the source marker's trailing edge so the content start (and
+            // caret positions) never move: "iii." may be wider than "3." — it grows left.
+            var trailingX = loc.x
+            let next = gr.location + gr.length // the space after the marker, same line
+            if next < numberOfGlyphs {
+                trailingX = location(forGlyphAt: next).x
+            }
+            let attrs: [NSAttributedString.Key: Any] = [.font: font,
+                                                        .foregroundColor: NSColor.secondaryLabelColor]
+            let str = display as NSString
+            let w = str.size(withAttributes: attrs).width
+            // draw(at:) takes the glyph-box top-left in this flipped view
+            str.draw(at: NSPoint(x: frag.minX + trailingX - w + origin.x,
+                                 y: frag.minY + loc.y - font.ascender + origin.y),
+                     withAttributes: attrs)
         }
     }
 
@@ -1706,13 +2066,25 @@ final class SmartTextView: NSTextView {
             let idx = characterIndexForInsertion(at: pt)
             let lineR = ns.lineRange(for: NSRange(location: min(idx, ns.length - 1), length: 0))
             let line = ns.substring(with: lineR)
+            // hit zone is the glyph itself, not the whole indented prefix — clicks on the
+            // indentation or at the content start place the caret / start a drag as normal
             if let m = Self.checkboxRegex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)),
-               idx >= lineR.location, idx < lineR.location + m.range.length {
-                let boxR = NSRange(location: lineR.location + m.range(at: 2).location, length: 1)
+               case let boxStart = lineR.location + m.range(at: 2).location,
+               idx >= boxStart, idx <= boxStart + 1 {
+                let boxR = NSRange(location: boxStart, length: 1)
                 let checked = ns.substring(with: boxR) == "☑"
                 insertText(checked ? "☐" : "☑", replacementRange: boxR)
                 // tactile confirmation on the same event that flips the box (causality)
                 NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                return
+            }
+            // a click landing inside a hidden heading marker (it's ~0pt wide at the line's
+            // left edge) snaps the caret to the title text instead of before the "#"
+            if let h = MarkdownTextView.Coordinator.headingPrefix.firstMatch(in: line,
+                    range: NSRange(location: 0, length: (line as NSString).length)),
+               idx >= lineR.location, idx < lineR.location + h.range.length {
+                setSelectedRange(NSRange(location: lineR.location + h.range.length, length: 0))
+                window?.makeFirstResponder(self)
                 return
             }
         }
