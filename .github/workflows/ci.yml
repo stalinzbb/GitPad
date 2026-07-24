@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# CI only reads code; never let a run's token write to the repo
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: macos-latest
