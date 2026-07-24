@@ -136,7 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         note.addItem(withTitle: "Library", action: #selector(toggleLibraryCmd), keyEquivalent: "l")
         note.addItem(withTitle: "Search Notes", action: #selector(searchNotesCmd), keyEquivalent: "k")
         note.addItem(.separator())
-        note.addItem(withTitle: "Save", action: #selector(saveCmd), keyEquivalent: "s")
+        // saveCmd → saveNow → onSaved → backgroundSync: ⌘S has always synced too
+        note.addItem(withTitle: "Save & Sync", action: #selector(saveCmd), keyEquivalent: "s")
         let del = note.addItem(withTitle: "Delete Note", action: #selector(deleteNoteCmd), keyEquivalent: "\u{8}")
         del.keyEquivalentModifierMask = .command
         // no ⌘Z — that belongs to the editor's own text undo

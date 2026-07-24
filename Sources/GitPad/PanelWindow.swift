@@ -54,7 +54,7 @@ final class PanelWindow: NSPanel {
 
     /// Collapse to a 240×40 lozenge (saving the expanded frame) or restore it.
     func applyPill(_ pill: Bool) {
-        isMovableByWindowBackground = !pill // pill drags via its own gesture (tap = expand)
+        isMovableByWindowBackground = !pill // pill drags via its own gesture (double-tap = expand)
         let target: NSRect
         let radius: CGFloat
         if pill {
@@ -65,15 +65,28 @@ final class PanelWindow: NSPanel {
             target = expandedFrame ?? NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560)
             radius = 14
         }
-        let animate = !Motion.reduce
-        NSAnimationContext.runAnimationGroup { ctx in
-            // snappy: strong ease-out (fast start = responsive) at ~0.2s, not the mushy
-            // built-in easeInEaseOut. The pill toggles often, so it must feel instant.
-            ctx.duration = animate ? 0.2 : 0
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+        // Order the window first: expanding straight into key means typing works the moment
+        // the animation starts, and key state never flips mid-flight.
+        if pill { orderFront(nil) } else { makeKeyAndOrderFront(nil) }
+
+        guard !Motion.reduce else {
             contentView?.layer?.cornerRadius = radius
-            (animate ? animator() : self).setFrame(target, display: true)
+            setFrame(target, display: true)
+            return
         }
-        if pill { orderFront(nil) } else { makeKeyAndOrderFront(nil) } // pill floats without stealing focus
+        NSAnimationContext.runAnimationGroup { ctx in
+            // snappy: strong ease-out (fast start = responsive), not the mushy built-in
+            // easeInEaseOut. The pill toggles often, so it must feel instant.
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+            // One CA transaction drives the window AND its content. Previously the full UI was
+            // jammed into the 240×40 frame instantly and NSHostingView re-solved layout every
+            // frame while animator() grew the window — that re-wrap was the jitter. Laying out
+            // once at the target size lets CA interpolate the result instead.
+            ctx.allowsImplicitAnimation = true
+            contentView?.layer?.cornerRadius = radius
+            setFrame(target, display: true)
+            contentView?.layoutSubtreeIfNeeded()
+        }
     }
 }

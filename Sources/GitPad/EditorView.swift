@@ -74,6 +74,10 @@ enum Motion {
     static var screen: Animation? { reduce ? nil : .spring(response: 0.32, dampingFraction: 0.85) }
     static var quick:  Animation? { reduce ? nil : .spring(response: 0.18, dampingFraction: 0.9) }
     static var pop:    Animation? { reduce ? nil : .spring(response: 0.30, dampingFraction: 0.7) }
+    /// Mirrors `PanelWindow.applyPill`'s CA curve so SwiftUI chrome tracks the window frame.
+    static var pillFrame: Animation? {
+        reduce ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.22)
+    }
 }
 
 /// Contrast floor for the floating panel. The window blends `.behindWindow`, so without
@@ -126,6 +130,9 @@ struct EditorView: View {
         .overlay( // hairline edge; material below dims itself when the window loses key
             RoundedRectangle(cornerRadius: store.pill ? 20 : 14, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                // match applyPill's curve, or the hairline snaps to its new radius while
+                // the window is still growing
+                .animation(Motion.pillFrame, value: store.pill)
         )
         .frame(minWidth: store.pill ? 0 : 280, minHeight: store.pill ? 0 : 180)
         .onAppear { store.applyAppearance?(theme.appearance) }
@@ -313,10 +320,15 @@ struct NavCenter: View {
     }
 }
 
-/// Collapsed UI: a lozenge. Tap it to expand (or ⌥Space); drag it to move.
-/// One DragGesture serves both — a near-zero move on release is treated as a tap.
+/// Collapsed UI: a lozenge. Double-click it to expand (or ⌥Space); drag it to move —
+/// mirroring the double-click that minimizes the header, so collapse and expand match.
+/// One DragGesture serves both: a near-zero move on release is a tap, and two taps inside
+/// the system double-click interval expand. This can't live in `PanelWindow.mouseDown`
+/// like the header's does — the pill's gesture covers the whole window and swallows the
+/// event before it reaches the window. A single tap only arms, so there's no delay.
 struct PillView: View {
     @ObservedObject var store: NoteStore
+    @State private var lastTap = Date.distantPast
 
     var body: some View {
         HStack(spacing: 8) {
@@ -334,11 +346,18 @@ struct PillView: View {
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in store.pillDrag?() }
                 .onEnded { _ in
-                    // moved? that was a reposition. didn't? that was a tap → expand.
-                    if store.pillDragEnded?() != true { store.setPill?(false) }
+                    // moved? that was a reposition, and it never counts toward a double-click
+                    guard store.pillDragEnded?() != true else { lastTap = .distantPast; return }
+                    let now = Date()
+                    if now.timeIntervalSince(lastTap) <= NSEvent.doubleClickInterval {
+                        lastTap = .distantPast // consume, so a third click doesn't re-trigger
+                        store.setPill?(false)
+                    } else {
+                        lastTap = now // first click just arms the second
+                    }
                 }
         )
-        .help("Tap to expand (\(Hotkey.display))")
+        .help("Double-click to expand (\(Hotkey.display))")
     }
 }
 
@@ -839,6 +858,7 @@ struct LibraryView: View {
     @State private var source: LibrarySource = .recent
     @State private var creatingFolder = false
     @State private var newFolderName = ""
+    @State private var newFolderHover = false
     @State private var renaming: String?
     @State private var renameText = ""
     @State private var deleting: String?
@@ -943,7 +963,7 @@ struct LibraryView: View {
                     sourceRow(.daily)
                     sourceRow(.inbox)
                     if !folders.isEmpty {
-                        Text("FOLDERS")
+                        Text("Folders".uppercased()) // matches the note-list section headers
                             .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                             .tracking(0.6)
                             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
@@ -963,9 +983,11 @@ struct LibraryView: View {
             if creatingFolder {
                 TextField("Folder name", text: $newFolderName)
                     .textFieldStyle(.plain)
-                    .font(.caption)
+                    .font(.callout)
                     .focused($folderFieldFocused)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    // 16 = the rail's 6pt gutter + a row's 10pt inset, so the caret
+                    // lines up with the folder names above it
+                    .padding(.horizontal, 16).padding(.vertical, 6)
                     .onSubmit {
                         store.createFolder(newFolderName)
                         if !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -978,12 +1000,20 @@ struct LibraryView: View {
                 Button {
                     creatingFolder = true; folderFieldFocused = true
                 } label: {
-                    Label("New Folder", systemImage: "folder.badge.plus").font(.caption)
+                    // same geometry and hover pill as a folder row, so it reads as one list
+                    Label("New Folder", systemImage: "folder.badge.plus")
+                        .font(.callout).lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: railSlot, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 3)
+                        .background(newFolderHover ? Color.primary.opacity(0.05) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .padding(.horizontal, 6).padding(.vertical, 6)
+                .onHover { newFolderHover = $0 }
+                .animation(Motion.quick, value: newFolderHover)
             }
         }
         .frame(width: 150)
@@ -1033,8 +1063,8 @@ struct LibraryView: View {
                 Text("\(count(s))").foregroundStyle(.secondary)
             }
                 .font(.callout)
-                .frame(maxWidth: .infinity, minHeight: ChromeIcon.side, alignment: .leading) // match folder-row height
-                .padding(.horizontal, 10).padding(.vertical, 6)
+                .frame(maxWidth: .infinity, minHeight: railSlot, alignment: .leading) // match folder-row height
+                .padding(.horizontal, 10).padding(.vertical, 3)
                 .background(source == s ? Color.accentColor.opacity(0.18) : .clear,
                             in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
@@ -1078,6 +1108,10 @@ struct LibraryView: View {
     }
 }
 
+/// One height for every sidebar row: 22pt of content + 3pt above and below ≈ 28pt.
+/// Shared so the rail's sources, folders and New Folder can't drift apart.
+private let railSlot: CGFloat = 22
+
 /// Folder row in the rail: tap to select; hover reveals an ⋯ menu; right-click too.
 struct FolderRailRow: View {
     let name: String
@@ -1092,7 +1126,7 @@ struct FolderRailRow: View {
         HStack(spacing: 6) {
             Label(name, systemImage: "folder").font(.callout).lineLimit(1)
             Spacer(minLength: 0)
-            // count and ⋯ share ONE fixed 28×28 slot, so nothing resizes on hover.
+            // count and ⋯ share ONE fixed slot, so nothing resizes on hover.
             // (No .fixedSize(): that re-measured on the menu's own hover highlight and
             // fed the twitch back into row layout.)
             Group {
@@ -1103,8 +1137,8 @@ struct FolderRailRow: View {
                     } label: {
                         Image(systemName: "ellipsis")
                             .rotationEffect(.degrees(90)) // vertical ⋮ (no single SF symbol for it)
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: ChromeIcon.side, height: ChromeIcon.side)
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: railSlot, height: railSlot)
                             .contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden)
@@ -1114,9 +1148,9 @@ struct FolderRailRow: View {
                     Text("\(count)").font(.callout).foregroundStyle(.secondary)
                 }
             }
-            .frame(width: ChromeIcon.side, height: ChromeIcon.side)
+            .frame(width: railSlot, height: railSlot)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, 10).padding(.vertical, 3)
         .background(selected ? Color.accentColor.opacity(0.18)
                              : (hovering ? Color.primary.opacity(0.05) : .clear),
                     in: RoundedRectangle(cornerRadius: 6))
@@ -1283,6 +1317,21 @@ struct MarkdownTextView: NSViewRepresentable {
             return p
         }()
 
+        private static let listIndentRegex = try! NSRegularExpression(
+            pattern: #"^( *)(?:[-*+☐☑] |\d+\. )"#, options: [.anchorsMatchLines])
+
+        /// Per-depth copy of `paragraphStyle` (so leading and spacing carry over), cached
+        /// because every keystroke re-highlights the paragraph.
+        private static var indentStyles: [Int: NSParagraphStyle] = [:]
+        private static func indentStyle(_ depth: Int) -> NSParagraphStyle {
+            if let s = indentStyles[depth] { return s }
+            let p = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+            p.firstLineHeadIndent = CGFloat(depth) * 14
+            p.headIndent = CGFloat(depth) * 14 + 18 // wrapped text lines up past the marker
+            indentStyles[depth] = p
+            return p
+        }
+
         // MARK: fonts
         static func baseFont(_ size: CGFloat, _ design: String) -> NSFont {
             switch design {
@@ -1311,14 +1360,11 @@ struct MarkdownTextView: NSViewRepresentable {
         // MARK: paragraph-scoped highlighting
         func textStorage(_ storage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                          range editedRange: NSRange, changeInLength delta: Int) {
+            // Synchronous: hopping to the next runloop left one frame of unstyled text, which
+            // read as the line jumping while you typed. Re-entry is already covered — our own
+            // attribute edits come back with `.editedAttributes`, not `.editedCharacters`.
             guard editedMask.contains(.editedCharacters) else { return }
-            let loc = min(editedRange.location, storage.length)
-            let safe = NSRange(location: loc, length: min(editedRange.length, storage.length - loc))
-            let para = (storage.string as NSString).paragraphRange(for: safe)
-            DispatchQueue.main.async { [weak self, weak storage] in
-                guard let self, let storage else { return }
-                self.highlight(storage, range: para)
-            }
+            highlight(storage, range: (storage.string as NSString).paragraphRange(for: editedRange))
         }
 
         private var cachedRules: (size: CGFloat, design: String, theme: String,
@@ -1374,6 +1420,15 @@ struct MarkdownTextView: NSViewRepresentable {
                 regex.enumerateMatches(in: storage.string, range: range) { match, _, _ in
                     if let r = match?.range { storage.addAttributes(attrs, range: r) }
                 }
+            }
+            // Nesting has to be visible, or Tab looks like it did nothing: indent each list
+            // line by its depth, and hang wrapped lines past the marker.
+            let ns = storage.string as NSString
+            Self.listIndentRegex.enumerateMatches(in: storage.string, range: range) { match, _, _ in
+                guard let m = match else { return }
+                let depth = m.range(at: 1).length / 2 // Tab inserts two spaces per level
+                storage.addAttribute(.paragraphStyle, value: Self.indentStyle(depth),
+                                     range: ns.paragraphRange(for: m.range))
             }
             storage.endEditing()
         }
@@ -1621,8 +1676,9 @@ final class DividerLayoutManager: NSLayoutManager {
             c.lineCapStyle = .round; c.lineJoinStyle = .round
             NSColor.white.setStroke(); c.stroke()
         } else {
-            NSColor.tertiaryLabelColor.setStroke()
-            path.lineWidth = 1.3; path.stroke()
+            // lighter, thinner outline — the box should recede until it's ticked
+            NSColor.quaternaryLabelColor.setStroke()
+            path.lineWidth = 1.1; path.stroke()
         }
     }
 }

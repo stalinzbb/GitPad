@@ -92,6 +92,7 @@ final class NoteStore: ObservableObject {
     // ponytail: main-thread reads; background index only if libraries hit thousands of notes
     private var contentCache: [URL: (text: String, mtime: Date)] = [:]
     private var metaCache: [URL: (meta: NoteMeta, mtime: Date)] = [:]
+    private var mtimeCache: [URL: Date] = [:]
     private var lastNew = Date.distantPast
 
     init() {
@@ -102,25 +103,49 @@ final class NoteStore: ObservableObject {
         selected = dailyNote()
     }
 
-    /// Older daily notes were saved without a title, so the Library shows their raw
-    /// `2026-07-23` filename. Give each a proper date heading derived from the FILENAME
-    /// (not today), so a historical note gets its real day. Idempotent; changed files ride
-    /// out on the next sync commit.
+    /// Give every daily note the same date heading, derived from the FILENAME (not today)
+    /// so a historical note gets its real day.
+    ///
+    /// Two cases get rewritten: a note with no heading at all, and one still carrying a
+    /// heading an OLDER BUILD generated (`Thursday, 23 July`, `23 July` — no year). Those
+    /// stale forms are re-generated from the date and compared as strings, so we only ever
+    /// touch text this app wrote itself; a title the user typed can't collide by
+    /// construction and is left alone. Idempotent — changed files ride out on the next sync.
     // ponytail: re-reads every Daily file each launch — tiny files; gate behind a flag if launch measurably slows.
     private func backfillDailyTitles() {
         let fm = FileManager.default
         let daily = dir.appendingPathComponent("Daily")
-        let parse = DateFormatter(); parse.dateFormat = "yyyy-MM-dd"
-        let header = DateFormatter(); header.dateFormat = "EEEE, d MMMM yyyy"
+        let parse = DateFormatter()
+        parse.dateFormat = "yyyy-MM-dd"
+        parse.locale = Locale(identifier: "en_US_POSIX") // filenames are machine-written, never localised
+        // display formatters keep the current locale — that's what the old builds wrote in
+        let canonical = DateFormatter(); canonical.dateFormat = "EEEE, d MMMM yyyy"
+        let staleFmts: [DateFormatter] = ["EEEE, d MMMM", "d MMMM"].map {
+            let df = DateFormatter(); df.dateFormat = $0; return df
+        }
+
         for url in (try? fm.contentsOfDirectory(at: daily, includingPropertiesForKeys: nil)) ?? []
             where url.pathExtension == "md" {
             guard let date = parse.date(from: url.deletingPathExtension().lastPathComponent),
                   let body = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let firstNonEmpty = body.split(separator: "\n")
-                .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            if firstNonEmpty?.hasPrefix("# ") == true { continue } // already titled
-            try? ("# \(header.string(from: date))\n\n" + body)
-                .write(to: url, atomically: true, encoding: .utf8)
+            let want = "# " + canonical.string(from: date)
+            let lines = body.split(separator: "\n", omittingEmptySubsequences: false)
+            let firstIdx = lines.firstIndex { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            let first = firstIdx.map { lines[$0].trimmingCharacters(in: .whitespaces) }
+
+            let updated: String
+            if first == want {
+                continue                                   // already canonical
+            } else if let first, first.hasPrefix("# ") {
+                let stale = staleFmts.map { "# " + $0.string(from: date) }
+                guard stale.contains(first), let i = firstIdx else { continue } // user's own title
+                var out = lines
+                out[i] = Substring(want)
+                updated = out.joined(separator: "\n")
+            } else {
+                updated = want + "\n\n" + body             // no heading at all → prepend one
+            }
+            try? updated.write(to: url, atomically: true, encoding: .utf8)
             uncache(url)
         }
     }
@@ -140,7 +165,12 @@ final class NoteStore: ObservableObject {
             }
         }
         folders = dirs.sorted()
-        notes = found.sorted { modified($0) > modified($1) }
+        // stat once per file, not once per sort comparison; a whole rebuild also picks up
+        // sync pulls and external edits that the cache would otherwise hold stale
+        var stamps: [URL: Date] = [:]
+        for u in found { stamps[u] = Self.stat(u) }
+        mtimeCache = stamps
+        notes = found.sorted { (stamps[$0] ?? .distantPast) > (stamps[$1] ?? .distantPast) }
         if let sel = selected, !notes.contains(where: { $0.path == sel.path }) { selected = notes.first }
         // first conflict ever: show the explainer once, and only from Capture so it
         // can't yank the screen out from under someone mid-task
@@ -367,6 +397,7 @@ final class NoteStore: ObservableObject {
             return
         }
         try? content.write(to: orig, atomically: true, encoding: .utf8)
+        uncache(orig) // the original's body just changed — every cached read of it is stale
         if selected?.path == orig.path { selected = orig } // reload
         delete(conflictCopy)
         onSaved?()
@@ -439,33 +470,68 @@ final class NoteStore: ObservableObject {
 
     /// Drop every cached read of `url` — call wherever a file moves or is rewritten.
     private func uncache(_ url: URL) {
-        titleCache[url] = nil; contentCache[url] = nil; metaCache[url] = nil
+        titleCache[url] = nil; contentCache[url] = nil; metaCache[url] = nil; mtimeCache[url] = nil
     }
 
     private func uncacheAll() {
-        titleCache.removeAll(); contentCache.removeAll(); metaCache.removeAll()
+        titleCache.removeAll(); contentCache.removeAll(); metaCache.removeAll(); mtimeCache.removeAll()
     }
 
+    /// Case- and diacritic-insensitive, so "cafe" finds "Café" and "Cafe".
+    static func fold(_ s: String) -> String {
+        s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+    }
+
+    /// Smart-lite search: split the query on whitespace and keep a note only if EVERY token
+    /// hits its title or its body — so "groc milk" finds the note titled "Groceries" that
+    /// mentions milk. Results rank title matches above body-only ones; within a tier the
+    /// caller's mtime order survives.
     func matches(_ query: String) -> [URL] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = Self.fold(query.trimmingCharacters(in: .whitespaces))
         guard !q.isEmpty else { return notes }
-        return notes.filter {
-            title(for: $0).lowercased().contains(q) ||
-            (q.count >= 2 && content(of: $0).contains(q))
+        let tokens = q.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return notes }
+
+        var ranked: [(url: URL, tier: Int)] = []
+        for url in notes {
+            let t = Self.fold(title(for: url))
+            if tokens.allSatisfy({ t.contains($0) }) {
+                ranked.append((url, t.contains(q) ? 0 : 1)) // whole phrase in title beats scattered tokens
+            } else {
+                // a 1-char token is too noisy to run against whole bodies (the original guard)
+                let body = content(of: url)
+                guard tokens.allSatisfy({ t.contains($0) || ($0.count >= 2 && body.contains($0)) })
+                else { continue }
+                ranked.append((url, 2))
+            }
         }
+        // pair with the original index so equal tiers keep `notes` order (sorted isn't stable)
+        return ranked.enumerated()
+            .sorted { ($0.element.tier, $0.offset) < ($1.element.tier, $1.offset) }
+            .map(\.element.url)
     }
 
-    /// Lowercased file body, mtime-validated (mirrors `titleCache`) so search
+    /// Folded file body, mtime-validated (mirrors `titleCache`) so search
     /// doesn't re-read every file on each keystroke.
     private func content(of url: URL) -> String {
         let mt = modified(url)
         if let c = contentCache[url], c.mtime == mt { return c.text }
-        let text = (try? String(contentsOf: url, encoding: .utf8))?.lowercased() ?? ""
+        let text = Self.fold((try? String(contentsOf: url, encoding: .utf8)) ?? "")
         contentCache[url] = (text, mt)
         return text
     }
 
+    /// Stat once, then serve from memory. `refresh()`'s sort and every Library render call
+    /// this dozens of times per pass, and it also gates the title/content/meta caches.
+    // ponytail: an external edit stays stale until the next refresh(), which re-stats everything.
     func modified(_ url: URL) -> Date {
+        if let d = mtimeCache[url] { return d }
+        let d = Self.stat(url)
+        mtimeCache[url] = d
+        return d
+    }
+
+    private static func stat(_ url: URL) -> Date {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 

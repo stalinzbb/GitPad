@@ -17,6 +17,9 @@ if CommandLine.arguments.contains("--selftest") {
     let editor = NoteStore.fromMarkdown(nested)
     precondition(editor.contains("  ☐ a") && editor.contains("    ☑ b"), editor)
     precondition(NoteStore.toMarkdown(editor) == nested, NoteStore.toMarkdown(editor))
+    // search folding: "cafe" must find "Café" (diacritics + case)
+    precondition(NoteStore.fold("Café Notes").contains(NoteStore.fold("cafe")))
+    precondition(NoteStore.fold("RÉSUMÉ") == NoteStore.fold("resume"))
     print("selftest OK")
     exit(0)
 }
