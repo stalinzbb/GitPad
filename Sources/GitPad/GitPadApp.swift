@@ -134,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         note.autoenablesItems = false // no responder validates our @objc actions → force-enable
         note.addItem(withTitle: "New Note", action: #selector(newNoteCmd), keyEquivalent: "n")
         note.addItem(withTitle: "Library", action: #selector(toggleLibraryCmd), keyEquivalent: "l")
+        note.addItem(withTitle: "Search Notes", action: #selector(searchNotesCmd), keyEquivalent: "k")
         note.addItem(.separator())
         note.addItem(withTitle: "Save", action: #selector(saveCmd), keyEquivalent: "s")
         let del = note.addItem(withTitle: "Delete Note", action: #selector(deleteNoteCmd), keyEquivalent: "\u{8}")
@@ -162,8 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // recent notes are inserted just above this item on each open (menuNeedsUpdate)
         revealItem = menu.addItem(withTitle: "Reveal Notes in Finder", action: #selector(revealNotes), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit GitPad", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = menu.addItem(withTitle: "Quit GitPad", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
+        // …except Quit: this menu auto-enables its items, and AppDelegate doesn't implement
+        // terminate: — pointing it at self made AppKit grey the item out. NSApp does.
+        quit.target = NSApp
         menu.delegate = self // refresh the hotkey title + recent notes each time it opens
         statusItem.menu = menu
 
@@ -184,7 +188,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.panel.setFrameOrigin(NSPoint(x: o.origin.x + (mouse.x - m.x),
                                               y: o.origin.y + (mouse.y - m.y)))
         }
-        store.pillDragEnded = { [weak self] in self?.pillDragOrigin = nil; self?.pillDragMouse = nil }
+        store.pillDragEnded = { [weak self] in
+            guard let self, let start = self.pillDragMouse else { return false }
+            let end = NSEvent.mouseLocation
+            self.pillDragOrigin = nil; self.pillDragMouse = nil
+            return abs(end.x - start.x) + abs(end.y - start.y) >= 4 // same slop, screen space
+        }
         store.applyAppearance = { [weak self] name in
             self?.panel.appearance = name.flatMap { NSAppearance(named: $0) }
         }
@@ -300,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func newNoteCmd() { store.newNote() }
     @objc func toggleLibraryCmd() { store.toggleLibrary() }
+    @objc func searchNotesCmd() { store.searchNotes() }
     @objc func saveCmd() { store.saveNow() }
     @objc func deleteNoteCmd() { store.deleteCurrent() }
     @objc func undoDeleteCmd() { store.undoDelete() }

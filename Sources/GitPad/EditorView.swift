@@ -285,8 +285,7 @@ struct ChromeBar<L: View>: View {
                 ChromeIcon(symbol: ChromeGlyph.close, help: "Close (Esc)") { store.onHide?() }
             }
         }
-        // double-click the bar (title-bar convention) → minimize to pill
-        .simultaneousGesture(TapGesture(count: 2).onEnded { store.setPill?(true) })
+        // double-click-to-minimize lives in PanelWindow.mouseDown (see the note there)
     }
 }
 
@@ -334,11 +333,9 @@ struct PillView: View {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in store.pillDrag?() }
-                .onEnded { g in
-                    store.pillDragEnded?()
-                    if abs(g.translation.width) + abs(g.translation.height) < 4 {
-                        store.setPill?(false) // tap → expand
-                    }
+                .onEnded { _ in
+                    // moved? that was a reposition. didn't? that was a tap → expand.
+                    if store.pillDragEnded?() != true { store.setPill?(false) }
                 }
         )
         .help("Tap to expand (\(Hotkey.display))")
@@ -452,11 +449,17 @@ struct SettingsView: View {
                             Text(label).tag(tag)
                         }
                     }
-                    HStack {
-                        Slider(value: $editorFontSize, in: 11...20, step: 1) { Text("Size") }
-                        Text("\(Int(editorFontSize)) pt")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .frame(width: 36, alignment: .trailing)
+                    LabeledContent("Size") {
+                        HStack(spacing: 10) {
+                            Text("\(Int(editorFontSize)) pt")
+                                .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                            HStack(spacing: 0) {
+                                stepper("minus") { editorFontSize = max(11, editorFontSize - 1) }
+                                Divider().frame(height: 14)
+                                stepper("plus") { editorFontSize = min(20, editorFontSize + 1) }
+                            }
+                            .background(Color.primary.opacity(0.06), in: Capsule())
+                        }
                     }
                     Text("The quick brown fox jumps over the lazy dog.")
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
@@ -465,33 +468,44 @@ struct SettingsView: View {
                 Section("Global Hotkey") {
                     HotkeyRecorder()
                 }
-                Section("Sync") {
-                    Button {
-                        store.screen = .gitSetup
-                    } label: {
-                        Label("Set up sync — step-by-step guide", systemImage: "sparkles")
-                    }
+                Section {
                     HStack {
                         TextField("git@github.com:you/notes.git", text: $remote)
                             .textFieldStyle(.roundedBorder)
+                            .font(.caption.monospaced())
                             .onSubmit { saveRemote() }
                         Button("Save") { saveRemote() }
                             .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                     LabeledContent("Status") {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
-                            Text(store.syncStatus.label)
-                            if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
-                                Text("↑\(ab.ahead) ↓\(ab.behind)").foregroundStyle(.secondary)
+                            Group {
+                                Text(store.syncStatus.label)
+                                if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
+                                    Text("↑\(ab.ahead) ↓\(ab.behind)")
+                                }
                             }
+                            .font(.callout).foregroundStyle(.secondary)
+                            Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
+                                .disabled(store.syncing)
                         }
-                        .font(.callout).foregroundStyle(.secondary)
                     }
-                    Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
-                        .disabled(store.syncing)
                     if store.syncStatus == .offline {
-                        FixSyncPanel(store: store)
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            FixSyncPanel(store: store)
+                        }
+                        .listRowBackground(Color.orange.opacity(0.08))
+                    }
+                } header: {
+                    HStack {
+                        Text("Sync")
+                        Spacer()
+                        Button("Setup guide") { store.screen = .gitSetup }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tint)
                     }
                 }
                 if !store.conflicts.isEmpty {
@@ -504,28 +518,35 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Section("Appearance") {
-                    HStack(spacing: 12) {
-                        ForEach(Theme.all) { t in
-                            Button { themeID = t.id } label: {
-                                Circle().fill(t.swatchBg)
-                                    .frame(width: 26, height: 26)
-                                    .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
-                                    .overlay(themeID == t.id
-                                        ? Image(systemName: "checkmark")
-                                            .font(.system(size: 8, weight: .bold))
-                                            .foregroundStyle(.white)
-                                        : nil)
-                                    .overlay(Circle().strokeBorder(
-                                        Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
-                                        lineWidth: themeID == t.id ? 2 : 1))
-                                    .animation(Motion.quick, value: themeID)
+                Section {
+                    LabeledContent("Theme") {
+                        HStack(spacing: 12) {
+                            ForEach(Theme.all) { t in
+                                Button { themeID = t.id } label: {
+                                    Circle().fill(t.swatchBg)
+                                        .frame(width: 26, height: 26)
+                                        .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
+                                        .overlay(themeID == t.id
+                                            ? Image(systemName: "checkmark")
+                                                .font(.system(size: 8, weight: .bold))
+                                                .foregroundStyle(.white)
+                                            : nil)
+                                        .overlay(Circle().strokeBorder(
+                                            Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
+                                            lineWidth: themeID == t.id ? 2 : 1))
+                                        .animation(Motion.quick, value: themeID)
+                                }
+                                .buttonStyle(.plain)
+                                .help(t.id)
                             }
-                            .buttonStyle(.plain)
-                            .help(t.id)
                         }
+                        .padding(.vertical, 2)
                     }
-                    .padding(.vertical, 2)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("Changes apply immediately — there's no Save button.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -535,6 +556,16 @@ struct SettingsView: View {
         // backgroundSync publishes a fresh .synced(Date) on each cycle → refresh ahead/behind
         // exactly when sync finishes, instead of guessing with a 2s delay.
         .onChange(of: store.syncStatus) { _ in refreshGitInfo() }
+    }
+
+    private func stepper(_ symbol: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 26, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func saveRemote() {
@@ -724,12 +755,21 @@ struct HotkeyRecorder: View {
             HStack {
                 Text("Shortcut")
                 Spacer()
-                Button(recording ? "Press keys…  (Esc cancels)" : display) {
-                    recording ? stop() : start()
+                Button { recording ? stop() : start() } label: {
+                    Text(recording ? "Press keys…" : display)
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Color.primary.opacity(recording ? 0.12 : 0.06),
+                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.12)))
+                        .contentShape(Rectangle())
                 }
-                .frame(minWidth: 150)
+                .buttonStyle(.plain)
             }
-            Text(warning ?? "Press \(display) from any app to summon GitPad.")
+            Text(warning ?? (recording
+                             ? "Esc cancels."
+                             : "Press \(display) from any app to summon GitPad — click to change."))
                 .font(.caption)
                 .foregroundStyle(warning == nil ? .secondary : Color.orange)
         }
@@ -875,8 +915,13 @@ struct LibraryView: View {
                 if searching {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.tertiary)
+                } else {
+                    Text("⌘K").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(Color.primary.opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8) // breathe below the chrome bar
             Divider().opacity(0.4)
 
@@ -898,11 +943,13 @@ struct LibraryView: View {
                     sourceRow(.daily)
                     sourceRow(.inbox)
                     if !folders.isEmpty {
-                        Text("Folders")
+                        Text("FOLDERS")
                             .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                            .tracking(0.6)
                             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
                         ForEach(folders, id: \.self) { f in
-                            FolderRailRow(name: f, selected: source == .folder(f),
+                            FolderRailRow(name: f, count: count(.folder(f)),
+                                          selected: source == .folder(f),
                                           select: { source = .folder(f) },
                                           rename: { renameText = f; renaming = f },
                                           delete: { deleting = f })
@@ -968,10 +1015,24 @@ struct LibraryView: View {
         }
     }
 
+    /// How many notes a rail entry would show. Cheap: `notes` is already in memory.
+    private func count(_ s: LibrarySource) -> Int {
+        switch s {
+        case .recent: return store.notes.count
+        case .daily: return store.notes.filter { store.folder(of: $0) == "Daily" }.count
+        case .inbox: return store.notes.filter { store.folder(of: $0) == nil }.count
+        case .folder(let f): return store.notes.filter { store.folder(of: $0) == f }.count
+        }
+    }
+
     private func sourceRow(_ s: LibrarySource) -> some View {
         Button { source = s } label: {
-            Label(s.label, systemImage: s.symbol)
-                .font(.callout).lineLimit(1)
+            HStack(spacing: 6) {
+                Label(s.label, systemImage: s.symbol).lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(count(s))").foregroundStyle(.secondary)
+            }
+                .font(.callout)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(source == s ? Color.accentColor.opacity(0.18) : .clear,
@@ -998,7 +1059,9 @@ struct LibraryView: View {
                                 NoteRow(store: store, url: url)
                             }
                         } header: {
-                            Text(name).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                            Text(name.uppercased())
+                                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                                .tracking(0.6)
                         }
                     }
                 }
@@ -1011,12 +1074,14 @@ struct LibraryView: View {
         // which fires every 5-min sync and would churn rows.
         .animation(Motion.quick, value: query)
         .onAppear { searchFocused = true }
+        .onChange(of: store.searchRequest) { _ in searchFocused = true }
     }
 }
 
 /// Folder row in the rail: tap to select; hover reveals an ⋯ menu; right-click too.
 struct FolderRailRow: View {
     let name: String
+    let count: Int
     let selected: Bool
     let select: () -> Void
     let rename: () -> Void
@@ -1027,20 +1092,25 @@ struct FolderRailRow: View {
         HStack(spacing: 6) {
             Label(name, systemImage: "folder").font(.callout).lineLimit(1)
             Spacer(minLength: 0)
-            Menu {
-                Button("Rename…", action: rename)
-                Button("Delete Folder", role: .destructive, action: delete)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .rotationEffect(.degrees(90)) // vertical ⋮ (no single SF symbol for it)
-                    .font(.system(size: 13, weight: .medium))
+            // count and ⋯ share one slot: the row never changes width on hover
+            if hovering {
+                Menu {
+                    Button("Rename…", action: rename)
+                    Button("Delete Folder", role: .destructive, action: delete)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .rotationEffect(.degrees(90)) // vertical ⋮ (no single SF symbol for it)
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .tint(.secondary) // borderlessButton tints its label with accent; force it to match the chrome
+                .foregroundStyle(.secondary)
+                .frame(width: ChromeIcon.side, height: ChromeIcon.side) // same geometry as the nav bar
+                .contentShape(Rectangle())
+            } else {
+                Text("\(count)").font(.callout).foregroundStyle(.secondary)
+                    .frame(width: ChromeIcon.side)
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .tint(.secondary) // borderlessButton tints its label with accent; force it to match the chrome
-            .foregroundStyle(.secondary)
-            .frame(width: ChromeIcon.side, height: ChromeIcon.side) // same geometry as the nav bar
-            .contentShape(Rectangle())
-            .opacity(hovering ? 1 : 0)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(selected ? Color.accentColor.opacity(0.18)
@@ -1062,20 +1132,33 @@ struct NoteRow: View {
     let url: URL
     @State private var hovering = false
 
+    /// "3 of 7 done · yesterday" for checklists, else "first line · yesterday".
+    private var detail: String {
+        let m = store.meta(for: url)
+        let when = store.modified(url).formatted(.relative(presentation: .named))
+        if m.total > 0 { return "\(m.done) of \(m.total) done · \(when)" }
+        return (m.snippet.isEmpty ? "Empty" : m.snippet) + " · \(when)"
+    }
+
     var body: some View {
-        HStack {
+        HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.title(for: url)).lineLimit(1)
-                HStack(spacing: 4) {
-                    if let f = store.folder(of: url) {
-                        Text(f).font(.caption2).foregroundStyle(.secondary)
-                        Text("·").font(.caption2).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    if store.meta(for: url).total > 0 {
+                        Image(systemName: "checkmark.square.fill")
+                            .font(.caption2).foregroundStyle(.tint)
                     }
-                    Text(store.modified(url), format: .relative(presentation: .named))
-                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(store.title(for: url)).font(.callout.weight(.semibold)).lineLimit(1)
                 }
+                Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: 4)
+            if store.folder(of: url) == "Daily" {
+                Text("Daily")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+            }
             Menu {
                 Button("Open") { store.open(url) }
                 Button(store.isPinned(url) ? "Unpin" : "Pin") { store.togglePin(url) }
@@ -1096,7 +1179,7 @@ struct NoteRow: View {
             .fixedSize()
             .opacity(hovering ? 1 : 0)
         }
-        .padding(.vertical, 2).padding(.horizontal, 6)
+        .padding(.vertical, 5).padding(.horizontal, 6)
         .background(Color.primary.opacity(hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onTapGesture { store.open(url) }
@@ -1474,10 +1557,11 @@ final class DividerLayoutManager: NSLayoutManager {
         let path = NSBezierPath(roundedRect: box, xRadius: side * 0.28, yRadius: side * 0.28)
         if checked {
             accent.setFill(); path.fill()
+            // y grows downward here (NSTextView is flipped): mid-left → bottom dip → top-right
             let c = NSBezierPath()
-            c.move(to: NSPoint(x: box.minX + side * 0.24, y: box.minY + side * 0.52))
-            c.line(to: NSPoint(x: box.minX + side * 0.42, y: box.minY + side * 0.32))
-            c.line(to: NSPoint(x: box.minX + side * 0.76, y: box.minY + side * 0.70))
+            c.move(to: NSPoint(x: box.minX + side * 0.24, y: box.minY + side * 0.48))
+            c.line(to: NSPoint(x: box.minX + side * 0.42, y: box.minY + side * 0.68))
+            c.line(to: NSPoint(x: box.minX + side * 0.76, y: box.minY + side * 0.30))
             c.lineWidth = max(1.4, side * 0.12)
             c.lineCapStyle = .round; c.lineJoinStyle = .round
             NSColor.white.setStroke(); c.stroke()

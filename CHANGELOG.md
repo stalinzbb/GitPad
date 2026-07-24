@@ -34,6 +34,10 @@ Cross-device sync, an icon that behaves, and setup that explains itself.
   everything else.
 - Docs: `SYNCING.md` added; SECURITY.md documents the `StrictHostKeyChecking=accept-new`
   tradeoff. `test_gitsync.sh` grows to 8 scenarios.
+- **Fixed: "Quit GitPad" was greyed out.** The status menu auto-enables its items, and
+  every item's target was being set to the AppDelegate — which doesn't implement
+  `terminate:`, so AppKit disabled it. Quit now targets `NSApp`. (The only way to quit
+  was Activity Monitor or `pkill`.)
 
 ## [0.9] — unreleased
 

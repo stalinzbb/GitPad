@@ -163,3 +163,6 @@ new_device "$J" "- do not lose me" "$R8"
 grep -rq "do not lose me" "$J" --include='*.md' || { echo "FAIL: reset --hard ate a real note"; exit 1; }
 [ -f "$J/README.md" ] || { echo "FAIL: remote README not merged in"; exit 1; }
 echo "PASS: user content blocks adoption"
+
+"$BIN" --selftest >/dev/null || { echo "FAIL: note-meta parser selftest"; exit 1; }
+echo "PASS: note-meta parser (snippet + checklist tally)"

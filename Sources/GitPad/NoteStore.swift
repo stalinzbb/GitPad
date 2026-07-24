@@ -16,6 +16,13 @@ enum SyncStatus: Equatable {
     }
 }
 
+/// What a Library row needs beyond the title: a preview line and the checklist tally.
+struct NoteMeta {
+    var snippet = ""
+    var done = 0
+    var total = 0
+}
+
 final class NoteStore: ObservableObject {
     let dir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Documents/GitPad")
@@ -49,6 +56,14 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    /// ⌘K: Library with the search field focused. The counter is the signal — it also
+    /// re-focuses when the Library is already open (where `onAppear` won't fire again).
+    @Published var searchRequest = 0
+    func searchNotes() {
+        screen = .library
+        searchRequest += 1
+    }
+
     /// One step back for Esc / the back chevron.
     func goBack() {
         switch screen {
@@ -64,7 +79,10 @@ final class NoteStore: ObservableObject {
     var requestSync: (() -> Void)?
     var setPill: ((Bool) -> Void)?
     var pillDrag: (() -> Void)?      // fires on each drag tick; AppDelegate reads the mouse
-    var pillDragEnded: (() -> Void)?
+    /// Returns true if the pill was actually dragged. The gesture can't tell: the window
+    /// tracks the mouse, so the cursor never moves relative to the pill and the gesture's
+    /// own translation stays ~0. Only the AppDelegate sees the screen-space delta.
+    var pillDragEnded: (() -> Bool)?
     var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
     @Published var syncing = false
@@ -73,6 +91,7 @@ final class NoteStore: ObservableObject {
     private var titleCache: [URL: (title: String, mtime: Date)] = [:]
     // ponytail: main-thread reads; background index only if libraries hit thousands of notes
     private var contentCache: [URL: (text: String, mtime: Date)] = [:]
+    private var metaCache: [URL: (meta: NoteMeta, mtime: Date)] = [:]
     private var lastNew = Date.distantPast
 
     init() {
@@ -133,7 +152,7 @@ final class NoteStore: ObservableObject {
         guard !fm.fileExists(atPath: dst.path) else { return }
         let sel = selected
         try? fm.moveItem(at: dir.appendingPathComponent(name), to: dst)
-        titleCache.removeAll(); contentCache.removeAll()
+        uncacheAll()
         refresh()
         if let s = sel, s.deletingLastPathComponent().lastPathComponent == name {
             selected = dst.appendingPathComponent(s.lastPathComponent)
@@ -153,7 +172,7 @@ final class NoteStore: ObservableObject {
             try? fm.moveItem(at: item, to: dest)
         }
         try? fm.removeItem(at: folder)
-        titleCache.removeAll(); contentCache.removeAll()
+        uncacheAll()
         refresh()
     }
 
@@ -162,7 +181,7 @@ final class NoteStore: ObservableObject {
             .appendingPathComponent(url.lastPathComponent)
         guard dest.path != url.path else { return }
         try? FileManager.default.moveItem(at: url, to: dest)
-        titleCache[url] = nil; contentCache[url] = nil
+        uncache(url)
         if let i = pinned.firstIndex(of: rel(url)) { // keep the pin pointing at the new path
             pinned[i] = rel(dest)
             UserDefaults.standard.set(pinned, forKey: "pinned")
@@ -236,7 +255,7 @@ final class NoteStore: ObservableObject {
             let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             let sep = existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
             try? (existing + sep + trimmed + "\n").write(to: url, atomically: true, encoding: .utf8)
-            contentCache[url] = nil; titleCache[url] = nil
+            uncache(url)
             onSaved?()
             refresh()
         }
@@ -274,7 +293,7 @@ final class NoteStore: ObservableObject {
         try? FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
         if let t = trashed as URL? { lastDeleted = (original: url, trashed: t, pinned: wasPinned) }
         if wasPinned { togglePin(url) } // drop the stale pin; undo restores it
-        titleCache[url] = nil; contentCache[url] = nil
+        uncache(url)
         refresh()
     }
 
@@ -348,7 +367,7 @@ final class NoteStore: ObservableObject {
             n += 1
         }
         try? fm.moveItem(at: conflictCopy, to: dest)
-        titleCache[conflictCopy] = nil; contentCache[conflictCopy] = nil
+        uncache(conflictCopy)
         refresh()
         onSaved?()
     }
@@ -367,6 +386,40 @@ final class NoteStore: ObservableObject {
         let title = clean.isEmpty ? url.deletingPathExtension().lastPathComponent : clean
         titleCache[url] = (title, mt)
         return title
+    }
+
+    /// Library row data: first body line + checklist tally, mtime-validated like
+    /// `titleCache` (one read on a miss, none while the file is unchanged).
+    func meta(for url: URL) -> NoteMeta {
+        let mt = modified(url)
+        if let c = metaCache[url], c.mtime == mt { return c.meta }
+        let m = Self.parseMeta((try? String(contentsOf: url, encoding: .utf8)) ?? "")
+        metaCache[url] = (m, mt)
+        return m
+    }
+
+    /// Pure so `GitPad --selftest` can check it without touching the notes directory.
+    static func parseMeta(_ body: String) -> NoteMeta {
+        var m = NoteMeta()
+        for raw in body.split(separator: "\n").dropFirst() { // first non-empty line is the title
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("- [x] ") { m.done += 1; m.total += 1 }
+            else if line.hasPrefix("- [ ] ") { m.total += 1 }
+            guard m.snippet.isEmpty else { continue }
+            line = line.trimmingCharacters(in: CharacterSet(charactersIn: "#-*+> "))
+            if line.hasPrefix("[x] ") || line.hasPrefix("[ ] ") { line.removeFirst(4) }
+            if !line.isEmpty { m.snippet = line }
+        }
+        return m
+    }
+
+    /// Drop every cached read of `url` — call wherever a file moves or is rewritten.
+    private func uncache(_ url: URL) {
+        titleCache[url] = nil; contentCache[url] = nil; metaCache[url] = nil
+    }
+
+    private func uncacheAll() {
+        titleCache.removeAll(); contentCache.removeAll(); metaCache.removeAll()
     }
 
     func matches(_ query: String) -> [URL] {
@@ -421,7 +474,7 @@ final class NoteStore: ObservableObject {
     func saveNow() {
         guard let url = selected else { return }
         try? Self.toMarkdown(text).write(to: url, atomically: true, encoding: .utf8)
-        contentCache[url] = nil // body changed → search re-reads next time
+        uncache(url) // body changed → search/snippet re-read next time
         onSaved?()
     }
 }

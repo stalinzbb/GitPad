@@ -34,6 +34,19 @@ final class PanelWindow: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
+    /// Double-click the header → minimize to the pill (title-bar convention). Handled at
+    /// the window level on purpose: a SwiftUI gesture wide enough to catch the empty
+    /// header space would consume mouse-down and kill `isMovableByWindowBackground`
+    /// dragging. Events only reach here when no control took them, so the chrome
+    /// glyphs keep their own clicks.
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2, !store.pill, event.locationInWindow.y > frame.height - 42 {
+            store.setPill?(true)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
     // Esc steps back one level; the store owns the hierarchy.
     override func cancelOperation(_ sender: Any?) { store.goBack() }
 
