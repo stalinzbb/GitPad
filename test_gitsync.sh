@@ -166,3 +166,6 @@ echo "PASS: user content blocks adoption"
 
 "$BIN" --selftest >/dev/null || { echo "FAIL: note-meta parser selftest"; exit 1; }
 echo "PASS: note-meta parser (snippet + checklist tally)"
+
+"$BIN" --uitest >/dev/null || { echo "FAIL: editor list-interaction uitest"; exit 1; }
+echo "PASS: editor list interactions (tab/enter/backspace/renumber)"
