@@ -333,11 +333,9 @@ struct PillView: View {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in store.pillDrag?() }
-                .onEnded { g in
-                    store.pillDragEnded?()
-                    if abs(g.translation.width) + abs(g.translation.height) < 4 {
-                        store.setPill?(false) // tap → expand
-                    }
+                .onEnded { _ in
+                    // moved? that was a reposition. didn't? that was a tap → expand.
+                    if store.pillDragEnded?() != true { store.setPill?(false) }
                 }
         )
         .help("Tap to expand (\(Hotkey.display))")

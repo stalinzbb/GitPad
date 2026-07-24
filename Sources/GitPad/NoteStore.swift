@@ -79,7 +79,10 @@ final class NoteStore: ObservableObject {
     var requestSync: (() -> Void)?
     var setPill: ((Bool) -> Void)?
     var pillDrag: (() -> Void)?      // fires on each drag tick; AppDelegate reads the mouse
-    var pillDragEnded: (() -> Void)?
+    /// Returns true if the pill was actually dragged. The gesture can't tell: the window
+    /// tracks the mouse, so the cursor never moves relative to the pill and the gesture's
+    /// own translation stays ~0. Only the AppDelegate sees the screen-space delta.
+    var pillDragEnded: (() -> Bool)?
     var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
     @Published var syncing = false

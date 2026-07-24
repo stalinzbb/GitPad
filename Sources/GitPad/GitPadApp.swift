@@ -188,7 +188,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.panel.setFrameOrigin(NSPoint(x: o.origin.x + (mouse.x - m.x),
                                               y: o.origin.y + (mouse.y - m.y)))
         }
-        store.pillDragEnded = { [weak self] in self?.pillDragOrigin = nil; self?.pillDragMouse = nil }
+        store.pillDragEnded = { [weak self] in
+            guard let self, let start = self.pillDragMouse else { return false }
+            let end = NSEvent.mouseLocation
+            self.pillDragOrigin = nil; self.pillDragMouse = nil
+            return abs(end.x - start.x) + abs(end.y - start.y) >= 4 // same slop, screen space
+        }
         store.applyAppearance = { [weak self] name in
             self?.panel.appearance = name.flatMap { NSAppearance(named: $0) }
         }
