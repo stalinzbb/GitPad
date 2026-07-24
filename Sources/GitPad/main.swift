@@ -87,6 +87,20 @@ if CommandLine.arguments.contains("--uitest") {
     precondition(tv.string == "☐ a\n☐ \n", tv.string)
     precondition(markerCleared(tv, at: 4), "new checkbox glyph not display-styled")
 
+    // Toggling ☐ ↔ ☑ must not move the text: both glyphs are pinned to the same fixed
+    // advance (their fallback fonts — emoji for ☑! — have wildly different widths)
+    (tv, coord) = makeEditor("☐ task\n")
+    spin() // let the deferred styling pass run
+    guard let lm = tv.layoutManager else { preconditionFailure("no layout manager") }
+    let xUnchecked = lm.location(forGlyphAt: lm.glyphIndexForCharacter(at: 2)).x
+    let hUnchecked = lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+    tv.insertText("☑", replacementRange: NSRange(location: 0, length: 1))
+    spin()
+    let xChecked = lm.location(forGlyphAt: lm.glyphIndexForCharacter(at: 2)).x
+    let hChecked = lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+    precondition(abs(xChecked - xUnchecked) < 0.5, "text shifted on toggle: \(xUnchecked) → \(xChecked)")
+    precondition(abs(hChecked - hUnchecked) < 0.5, "line height changed on toggle: \(hUnchecked) → \(hChecked)")
+
     // Deleting a middle numbered line renumbers the rest, caret preserved
     (tv, coord) = makeEditor("1. a\n2. b\n3. c\n")
     tv.setSelectedRange(NSRange(location: 5, length: 5)) // "2. b\n"

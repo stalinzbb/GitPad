@@ -1205,6 +1205,13 @@ private let dividerKey = NSAttributedString.Key("gitpadDivider")
 private let checkboxKey = NSAttributedString.Key("gitpadCheckbox") // value: Bool (checked)
 private let markerKey = NSAttributedString.Key("gitpadListMarker") // value: String (display marker)
 
+/// The fixed layout advance a ☐/☑ occupies, derived from the body font. ☐/☑ aren't in
+/// SF Pro — fallback fonts (☑ often gets the emoji font!) have wildly different advances
+/// and line metrics, which shifted the text and line height between the unchecked, typed,
+/// and checked states. The glyph is laid out at 0.1pt with a kern of exactly this width,
+/// so both states occupy identical space and the drawn box is the single source of truth.
+private func checkboxAdvance(_ f: NSFont) -> CGFloat { (f.capHeight * 1.2).rounded() }
+
 /// Pure list logic: parsing, renumbering, and display markers. Disk stays CommonMark
 /// (`- ` bullets, `1. 2. 3.` ordinals at every depth); letters/romans and •/◦/▪ are
 /// display-layer only, drawn by DividerLayoutManager over cleared text.
@@ -1479,6 +1486,10 @@ struct MarkdownTextView: NSViewRepresentable {
             let f = Self.baseFont(fontSize, design)
             let base: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.labelColor,
                                                        .paragraphStyle: Self.paragraphStyle]
+            let tinyFont = NSFont.systemFont(ofSize: 0.1)
+            func checkKern(_ glyph: String) -> CGFloat {
+                checkboxAdvance(f) - (glyph as NSString).size(withAttributes: [.font: tinyFont]).width
+            }
             // headings get air above them; body spacing stays at the shared style's 6pt
             func headingStyle(_ before: CGFloat) -> NSParagraphStyle {
                 let p = Self.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
@@ -1506,9 +1517,13 @@ struct MarkdownTextView: NSViewRepresentable {
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
                 (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
                                       .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
-                // hide the raw glyph; DividerLayoutManager draws a real checkbox at its rect
-                (re(#"☐"#), [.foregroundColor: NSColor.clear, checkboxKey: false]),
-                (re(#"☑"#), [.foregroundColor: NSColor.clear, checkboxKey: true]),
+                // hide the raw glyph AND neutralize its fallback-font layout: 0.1pt font +
+                // a kern that pins the advance to the drawn box width, so ☐ and ☑ occupy
+                // identical space (no text shift or line-height jump on toggle/typing)
+                (re(#"☐"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
+                             .kern: checkKern("☐"), checkboxKey: false]),
+                (re(#"☑"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
+                             .kern: checkKern("☑"), checkboxKey: true]),
                 // dashes hidden; DividerLayoutManager draws a full-width rule instead
                 (re(#"^\s*[-—]{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
             ]
@@ -1554,7 +1569,17 @@ struct MarkdownTextView: NSViewRepresentable {
 
                 let width: CGFloat
                 if let w = self.prefixWidthCache[prefix] { width = w } else {
-                    width = (prefix as NSString).size(withAttributes: [.font: font]).width
+                    let marker = m.range(at: 2).location != NSNotFound
+                        ? lineNS.substring(with: m.range(at: 2)) : ""
+                    if marker == "☐" || marker == "☑" {
+                        // the glyph's layout advance is pinned to checkboxAdvance, not its
+                        // fallback-font width — measure the rest and add the pinned advance
+                        let rest = lineNS.substring(with: m.range(at: 1)) + " "
+                        width = (rest as NSString).size(withAttributes: [.font: font]).width
+                            + checkboxAdvance(font)
+                    } else {
+                        width = (prefix as NSString).size(withAttributes: [.font: font]).width
+                    }
                     self.prefixWidthCache[prefix] = width
                 }
                 let key = "\(depth)|\(width)"
@@ -1879,20 +1904,16 @@ final class DividerLayoutManager: NSLayoutManager {
             // Size from the text's cap height and sit the box ON the baseline, not on the
             // line-fragment's midY — the fragment is inflated by lineHeightMultiple, so the
             // old boundingRect box floated and drifted with font/size.
-            let font = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+            // the glyph itself is 0.1pt; size the box from the body text right after it,
+            // matching the kerned advance the glyph was pinned to (see checkboxAdvance)
+            var font = (storage.attribute(.font, at: min(range.location + 1, storage.length - 1),
+                                          effectiveRange: nil) as? NSFont)
                 ?? .systemFont(ofSize: NSFont.systemFontSize)
+            if font.pointSize < 1 { font = .systemFont(ofSize: NSFont.systemFontSize) }
             let frag = lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
             let loc = location(forGlyphAt: gr.location) // glyph offset within its fragment
             let baselineY = frag.minY + loc.y + origin.y
-            var side = (font.capHeight * 1.2).rounded()
-            // clamp to the "☐ " advance so a narrow fallback glyph can't put the drawn
-            // box on top of the first text character
-            let contentGlyph = gr.location + 2 // past "☐ "
-            if contentGlyph < numberOfGlyphs,
-               lineFragmentRect(forGlyphAt: contentGlyph, effectiveRange: nil).origin == frag.origin {
-                let avail = location(forGlyphAt: contentGlyph).x - loc.x - 1
-                if avail > 4 { side = min(side, avail) }
-            }
+            let side = checkboxAdvance(font)
             // flipped space: smaller y is higher, so the box spans cap height ABOVE the baseline.
             // frag.minX + loc.x is the glyph's left edge → indented checkboxes stay aligned.
             let box = NSRect(x: frag.minX + loc.x + origin.x, y: baselineY - side,
