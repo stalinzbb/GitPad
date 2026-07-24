@@ -1033,7 +1033,7 @@ struct LibraryView: View {
                 Text("\(count(s))").foregroundStyle(.secondary)
             }
                 .font(.callout)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: ChromeIcon.side, alignment: .leading) // match folder-row height
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(source == s ? Color.accentColor.opacity(0.18) : .clear,
                             in: RoundedRectangle(cornerRadius: 6))
@@ -1092,25 +1092,29 @@ struct FolderRailRow: View {
         HStack(spacing: 6) {
             Label(name, systemImage: "folder").font(.callout).lineLimit(1)
             Spacer(minLength: 0)
-            // count and ⋯ share one slot: the row never changes width on hover
-            if hovering {
-                Menu {
-                    Button("Rename…", action: rename)
-                    Button("Delete Folder", role: .destructive, action: delete)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .rotationEffect(.degrees(90)) // vertical ⋮ (no single SF symbol for it)
-                        .font(.system(size: 13, weight: .medium))
+            // count and ⋯ share ONE fixed 28×28 slot, so nothing resizes on hover.
+            // (No .fixedSize(): that re-measured on the menu's own hover highlight and
+            // fed the twitch back into row layout.)
+            Group {
+                if hovering {
+                    Menu {
+                        Button("Rename…", action: rename)
+                        Button("Delete Folder", role: .destructive, action: delete)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .rotationEffect(.degrees(90)) // vertical ⋮ (no single SF symbol for it)
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: ChromeIcon.side, height: ChromeIcon.side)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                    .tint(.secondary) // borderlessButton tints its label with accent; force it to match the chrome
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text("\(count)").font(.callout).foregroundStyle(.secondary)
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .tint(.secondary) // borderlessButton tints its label with accent; force it to match the chrome
-                .foregroundStyle(.secondary)
-                .frame(width: ChromeIcon.side, height: ChromeIcon.side) // same geometry as the nav bar
-                .contentShape(Rectangle())
-            } else {
-                Text("\(count)").font(.callout).foregroundStyle(.secondary)
-                    .frame(width: ChromeIcon.side)
             }
+            .frame(width: ChromeIcon.side, height: ChromeIcon.side)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(selected ? Color.accentColor.opacity(0.18)
@@ -1173,11 +1177,13 @@ struct NoteRow: View {
                 Button("Delete", role: .destructive) { store.delete(url) }
             } label: {
                 Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                    .frame(width: ChromeIcon.side, height: ChromeIcon.side) // constant slot; no .fixedSize() remeasure
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .fixedSize()
             .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering) // hidden ⋯ must not eat taps meant for the row
         }
         .padding(.vertical, 5).padding(.horizontal, 6)
         .background(Color.primary.opacity(hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 6))
@@ -1375,11 +1381,50 @@ struct MarkdownTextView: NSViewRepresentable {
         // MARK: auto list continuation
         func textView(_ tv: NSTextView, doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.insertNewline(_:)) { return continueList(tv) }
+            if selector == #selector(NSResponder.insertTab(_:)) { return indentList(tv, out: false) }
+            if selector == #selector(NSResponder.insertBacktab(_:)) { return indentList(tv, out: true) }
             return false
         }
 
         private static let listRegex = try! NSRegularExpression(
             pattern: #"^(\s*)(?:([-*+☐☑]) |(\d+)\. )(.*)$"#)
+
+        /// Tab / Shift-Tab nest list items by two spaces per level. Only list lines in the
+        /// selection are touched; a non-list line falls through to a normal tab (return false).
+        /// Markdown nests via leading whitespace and `to/fromMarkdown` preserves it, so this
+        /// round-trips with no NoteStore change.
+        // ponytail: no numbered-list renumbering on nesting; add if anyone notices.
+        private func indentList(_ tv: NSTextView, out: Bool) -> Bool {
+            let ns = tv.string as NSString
+            let span = ns.lineRange(for: tv.selectedRange())
+            var starts: [Int] = [] // line starts that are list items (span may be one empty line)
+            var i = span.location
+            repeat {
+                let lr = ns.lineRange(for: NSRange(location: i, length: 0))
+                let line = ns.substring(with: lr) as NSString
+                if Self.listRegex.firstMatch(in: line as String,
+                        range: NSRange(location: 0, length: line.length)) != nil {
+                    starts.append(lr.location)
+                }
+                i = lr.location + lr.length
+            } while i < span.location + span.length
+            guard !starts.isEmpty else { return false } // nothing list-shaped → default tab
+
+            // edit back-to-front so earlier line starts stay valid as we mutate
+            for start in starts.sorted(by: >) {
+                if !out {
+                    tv.insertText("  ", replacementRange: NSRange(location: start, length: 0))
+                } else if start < ns.length, ns.substring(with: NSRange(location: start, length: 1)) == "\t" {
+                    tv.insertText("", replacementRange: NSRange(location: start, length: 1))
+                } else {
+                    var n = 0 // strip up to two leading spaces
+                    while n < 2, start + n < ns.length,
+                          ns.substring(with: NSRange(location: start + n, length: 1)) == " " { n += 1 }
+                    if n > 0 { tv.insertText("", replacementRange: NSRange(location: start, length: n)) }
+                }
+            }
+            return true
+        }
 
         private func continueList(_ tv: NSTextView) -> Bool {
             let ns = tv.string as NSString
@@ -1545,15 +1590,25 @@ final class DividerLayoutManager: NSLayoutManager {
         storage.enumerateAttribute(checkboxKey, in: charRange) { value, range, _ in
             guard let checked = value as? Bool else { return }
             let gr = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            var rect = boundingRect(forGlyphRange: gr, in: container)
-            rect.origin.x += origin.x; rect.origin.y += origin.y
-            drawCheckbox(in: rect, checked: checked)
+            // Size from the text's cap height and sit the box ON the baseline, not on the
+            // line-fragment's midY — the fragment is inflated by lineHeightMultiple, so the
+            // old boundingRect box floated and drifted with font/size.
+            let font = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+                ?? .systemFont(ofSize: NSFont.systemFontSize)
+            let frag = lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
+            let loc = location(forGlyphAt: gr.location) // glyph offset within its fragment
+            let baselineY = frag.minY + loc.y + origin.y
+            let side = (font.capHeight * 1.2).rounded()
+            // flipped space: smaller y is higher, so the box spans cap height ABOVE the baseline.
+            // frag.minX + loc.x is the glyph's left edge → indented checkboxes stay aligned.
+            let box = NSRect(x: frag.minX + loc.x + origin.x, y: baselineY - side,
+                             width: side, height: side)
+            drawCheckbox(in: box, checked: checked)
         }
     }
 
-    private func drawCheckbox(in glyphRect: NSRect, checked: Bool) {
-        let side = min(glyphRect.width, glyphRect.height) * 0.82
-        let box = NSRect(x: glyphRect.minX, y: glyphRect.midY - side / 2, width: side, height: side)
+    private func drawCheckbox(in box: NSRect, checked: Bool) {
+        let side = box.width
         let path = NSBezierPath(roundedRect: box, xRadius: side * 0.28, yRadius: side * 0.28)
         if checked {
             accent.setFill(); path.fill()

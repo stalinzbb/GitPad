@@ -96,9 +96,33 @@ final class NoteStore: ObservableObject {
 
     init() {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        backfillDailyTitles() // before refresh()/dailyNote(): nothing is loaded yet, so no buffer to clobber
         refresh()
         if !UserDefaults.standard.bool(forKey: "onboarded") { screen = .onboarding }
         selected = dailyNote()
+    }
+
+    /// Older daily notes were saved without a title, so the Library shows their raw
+    /// `2026-07-23` filename. Give each a proper date heading derived from the FILENAME
+    /// (not today), so a historical note gets its real day. Idempotent; changed files ride
+    /// out on the next sync commit.
+    // ponytail: re-reads every Daily file each launch — tiny files; gate behind a flag if launch measurably slows.
+    private func backfillDailyTitles() {
+        let fm = FileManager.default
+        let daily = dir.appendingPathComponent("Daily")
+        let parse = DateFormatter(); parse.dateFormat = "yyyy-MM-dd"
+        let header = DateFormatter(); header.dateFormat = "EEEE, d MMMM yyyy"
+        for url in (try? fm.contentsOfDirectory(at: daily, includingPropertiesForKeys: nil)) ?? []
+            where url.pathExtension == "md" {
+            guard let date = parse.date(from: url.deletingPathExtension().lastPathComponent),
+                  let body = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let firstNonEmpty = body.split(separator: "\n")
+                .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            if firstNonEmpty?.hasPrefix("# ") == true { continue } // already titled
+            try? ("# \(header.string(from: date))\n\n" + body)
+                .write(to: url, atomically: true, encoding: .utf8)
+            uncache(url)
+        }
     }
 
     func refresh() {
