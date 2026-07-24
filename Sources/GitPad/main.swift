@@ -11,6 +11,12 @@ if CommandLine.arguments.contains("--selftest") {
     precondition(m.done == 1 && m.total == 2 && m.snippet == "some body", "\(m)")
     precondition(NoteStore.parseMeta("# Only a title\n").snippet.isEmpty)
     precondition(NoteStore.parseMeta("# T\n- [ ] first\n").snippet == "first")
+    // nested (indented) checkboxes must survive the markdown round-trip — the persistence
+    // guarantee behind Tab/Shift-Tab list nesting (Fix B).
+    let nested = "# T\n  - [ ] a\n    - [x] b\n"
+    let editor = NoteStore.fromMarkdown(nested)
+    precondition(editor.contains("  ☐ a") && editor.contains("    ☑ b"), editor)
+    precondition(NoteStore.toMarkdown(editor) == nested, NoteStore.toMarkdown(editor))
     print("selftest OK")
     exit(0)
 }
