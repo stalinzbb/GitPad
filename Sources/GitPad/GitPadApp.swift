@@ -145,6 +145,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         note.addItem(withTitle: "Minimize to Pill", action: #selector(minimizeCmd), keyEquivalent: "m")
         note.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         note.items.forEach { $0.target = self }
+        note.addItem(.separator())
+        // ⌘Q from the panel; the status-bar menu's Quit only fires while that menu is open
+        let quitCmd = note.addItem(withTitle: "Quit GitPad",
+                                   action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitCmd.target = NSApp // AppDelegate has no terminate:; NSApp does
         noteHolder.submenu = note
 
         NSApp.mainMenu = main

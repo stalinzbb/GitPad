@@ -549,6 +549,16 @@ struct SettingsView: View {
                     Text("Changes apply immediately — there's no Save button.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section {
+                    Button(role: .destructive) {
+                        NSApp.terminate(nil)
+                    } label: {
+                        Label("Quit GitPad", systemImage: "power")
+                    }
+                } footer: {
+                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
