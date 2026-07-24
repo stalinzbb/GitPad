@@ -1215,12 +1215,15 @@ private let dividerKey = NSAttributedString.Key("gitpadDivider")
 private let checkboxKey = NSAttributedString.Key("gitpadCheckbox") // value: Bool (checked)
 private let markerKey = NSAttributedString.Key("gitpadListMarker") // value: String (display marker)
 
-/// The fixed layout advance a ☐/☑ occupies, derived from the body font. ☐/☑ aren't in
-/// SF Pro — fallback fonts (☑ often gets the emoji font!) have wildly different advances
-/// and line metrics, which shifted the text and line height between the unchecked, typed,
-/// and checked states. The glyph is laid out at 0.1pt with a kern of exactly this width,
-/// so both states occupy identical space and the drawn box is the single source of truth.
-private func checkboxAdvance(_ f: NSFont) -> CGFloat { (f.capHeight * 1.2).rounded() }
+/// Drawn checkbox size and the fixed layout advance the ☐/☑ character occupies, derived
+/// from the body font. ☐/☑ aren't in SF Pro — fallback fonts (☑ often gets the emoji
+/// font!) have wildly different advances and line metrics, which shifted the text and line
+/// height between the unchecked, typed, and checked states. The glyph is laid out at 0.1pt
+/// with a kern of exactly `checkboxAdvance`, so both states occupy identical space and the
+/// drawn box is the single source of truth. The advance exceeds the box side by a gap so
+/// the label doesn't crowd the box (the space character alone was too tight).
+private func checkboxSide(_ f: NSFont) -> CGFloat { (f.capHeight * 1.45).rounded() }
+private func checkboxAdvance(_ f: NSFont) -> CGFloat { checkboxSide(f) + (f.pointSize * 0.3).rounded() }
 
 /// Pure list logic: parsing, renumbering, and display markers. Disk stays CommonMark
 /// (`- ` bullets, `1. 2. 3.` ordinals at every depth); letters/romans and •/◦/▪ are
@@ -1340,7 +1343,10 @@ struct MarkdownTextView: NSViewRepresentable {
         }
         if tv.string != text {
             tv.string = text
-            if text == "# " { tv.setSelectedRange(NSRange(location: 2, length: 0)) } // fresh note: caret after title marker
+            if text == "# " { // fresh note: caret after the title marker, keyboard ready to type
+                tv.setSelectedRange(NSRange(location: 2, length: 0))
+                DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
+            }
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
     }
@@ -1741,15 +1747,25 @@ struct MarkdownTextView: NSViewRepresentable {
             return true
         }
 
-        /// Backspace with the caret right after a list marker removes the whole
-        /// marker + trailing space in one go (Notes-style), instead of leaving a
-        /// stripped ☐ that no longer parses (and was drawn invisible).
+        static let headingPrefix = try! NSRegularExpression(pattern: #"^#{1,3} "#)
+
+        /// Backspace with the caret right after a list or heading marker removes the whole
+        /// marker in one go (Notes-style) — a title drops back to plain text instead of
+        /// leaving a stray "#", and a stripped ☐ never lingers invisibly.
         private func smartDeleteBackward(_ tv: NSTextView) -> Bool {
             let sel = tv.selectedRange()
             guard sel.length == 0, sel.location > 0 else { return false }
             let ns = tv.string as NSString
             let lineR = ns.lineRange(for: NSRange(location: min(sel.location, ns.length), length: 0))
-            guard let m = ListLogic.match(ns.substring(with: lineR)) else { return false }
+            let line = ns.substring(with: lineR)
+            if let h = Self.headingPrefix.firstMatch(in: line,
+                    range: NSRange(location: 0, length: (line as NSString).length)),
+               sel.location == lineR.location + h.range.length {
+                let r = NSRange(location: lineR.location, length: h.range.length)
+                if replaceText(tv, r, "") { tv.setSelectedRange(NSRange(location: lineR.location, length: 0)) }
+                return true
+            }
+            guard let m = ListLogic.match(line) else { return false }
             let contentStart = lineR.location + m.range(at: 4).location
             guard sel.location == contentStart else { return false }
             let markerLoc = m.range(at: 2).location != NSNotFound ? m.range(at: 2).location
@@ -1923,10 +1939,13 @@ final class DividerLayoutManager: NSLayoutManager {
             let frag = lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
             let loc = location(forGlyphAt: gr.location) // glyph offset within its fragment
             let baselineY = frag.minY + loc.y + origin.y
-            let side = checkboxAdvance(font)
-            // flipped space: smaller y is higher, so the box spans cap height ABOVE the baseline.
+            let side = checkboxSide(font)
+            // flipped space: smaller y is higher. The box is taller than the cap height, so
+            // center it on the cap band — it dips slightly below the baseline like a native
+            // checkbox instead of towering above the text.
             // frag.minX + loc.x is the glyph's left edge → indented checkboxes stay aligned.
-            let box = NSRect(x: frag.minX + loc.x + origin.x, y: baselineY - side,
+            let box = NSRect(x: frag.minX + loc.x + origin.x,
+                             y: baselineY - side + ((side - font.capHeight) / 2).rounded(),
                              width: side, height: side)
             drawCheckbox(in: box, checked: checked)
         }
@@ -1997,6 +2016,15 @@ final class SmartTextView: NSTextView {
                 insertText(checked ? "☐" : "☑", replacementRange: boxR)
                 // tactile confirmation on the same event that flips the box (causality)
                 NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                return
+            }
+            // a click landing inside a hidden heading marker (it's ~0pt wide at the line's
+            // left edge) snaps the caret to the title text instead of before the "#"
+            if let h = MarkdownTextView.Coordinator.headingPrefix.firstMatch(in: line,
+                    range: NSRange(location: 0, length: (line as NSString).length)),
+               idx >= lineR.location, idx < lineR.location + h.range.length {
+                setSelectedRange(NSRange(location: lineR.location + h.range.length, length: 0))
+                window?.makeFirstResponder(self)
                 return
             }
         }

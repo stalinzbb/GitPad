@@ -101,6 +101,13 @@ if CommandLine.arguments.contains("--uitest") {
     precondition(abs(xChecked - xUnchecked) < 0.5, "text shifted on toggle: \(xUnchecked) → \(xChecked)")
     precondition(abs(hChecked - hUnchecked) < 0.5, "line height changed on toggle: \(hUnchecked) → \(hChecked)")
 
+    // Backspace right after a heading marker drops the title to plain text
+    (tv, coord) = makeEditor("# Title\n")
+    tv.setSelectedRange(NSRange(location: 2, length: 0))
+    precondition(coord.textView(tv, doCommandBy: #selector(NSResponder.deleteBackward(_:))))
+    precondition(tv.string == "Title\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 0, length: 0), "\(tv.selectedRange())")
+
     // Deleting a middle numbered line renumbers the rest, caret preserved
     (tv, coord) = makeEditor("1. a\n2. b\n3. c\n")
     tv.setSelectedRange(NSRange(location: 5, length: 5)) // "2. b\n"
