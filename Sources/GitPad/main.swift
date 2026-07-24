@@ -69,6 +69,24 @@ if CommandLine.arguments.contains("--uitest") {
     precondition(tv.string == "  task\n", tv.string)
     precondition(tv.selectedRange() == NSRange(location: 2, length: 0), "\(tv.selectedRange())")
 
+    // The line created by Enter is styled in the same deferred pass — its marker must be
+    // cleared-for-display immediately, not on the next keystroke (was: raw "2."/"☐" flash)
+    func markerCleared(_ tv: SmartTextView, at loc: Int) -> Bool {
+        (tv.textStorage?.attribute(.foregroundColor, at: loc, effectiveRange: nil) as? NSColor) == NSColor.clear
+    }
+    (tv, coord) = makeEditor("1. p\n  1. A\n")
+    tv.setSelectedRange(NSRange(location: 11, length: 0)) // end of "  1. A"
+    precondition(coord.textView(tv, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+    spin()
+    precondition(tv.string == "1. p\n  1. A\n  2. \n", tv.string)
+    precondition(markerCleared(tv, at: 14), "new nested ordinal not display-styled") // the "2"
+    (tv, coord) = makeEditor("☐ a\n")
+    tv.setSelectedRange(NSRange(location: 3, length: 0))
+    precondition(coord.textView(tv, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+    spin()
+    precondition(tv.string == "☐ a\n☐ \n", tv.string)
+    precondition(markerCleared(tv, at: 4), "new checkbox glyph not display-styled")
+
     // Deleting a middle numbered line renumbers the rest, caret preserved
     (tv, coord) = makeEditor("1. a\n2. b\n3. c\n")
     tv.setSelectedRange(NSRange(location: 5, length: 5)) // "2. b\n"

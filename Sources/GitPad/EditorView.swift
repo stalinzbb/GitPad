@@ -1394,9 +1394,13 @@ struct MarkdownTextView: NSViewRepresentable {
                     self.isRenumbering = true
                     self.renumberListBlock(tv, around: para.location)
                     self.isRenumbering = false
-                    // renumbering may have shifted lengths; re-anchor the paragraph range
+                    // renumbering may have shifted lengths; re-clamp, keeping the full span —
+                    // an Enter edit covers TWO paragraphs (split line + new line), and collapsing
+                    // to one left the new line unstyled (raw "2."/"☐") until the next keystroke
                     let ns = storage.string as NSString
-                    range = ns.paragraphRange(for: NSRange(location: min(para.location, ns.length), length: 0))
+                    let loc = min(para.location, ns.length)
+                    let len = min(para.length, ns.length - loc)
+                    range = ns.paragraphRange(for: NSRange(location: loc, length: len))
                 }
                 self.highlight(storage, range: range)
             }
