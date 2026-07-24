@@ -320,15 +320,16 @@ struct NavCenter: View {
     }
 }
 
-/// Collapsed UI: a lozenge. Double-click it to expand (or ⌥Space); drag it to move —
-/// mirroring the double-click that minimizes the header, so collapse and expand match.
-/// One DragGesture serves both: a near-zero move on release is a tap, and two taps inside
-/// the system double-click interval expand. This can't live in `PanelWindow.mouseDown`
-/// like the header's does — the pill's gesture covers the whole window and swallows the
-/// event before it reaches the window. A single tap only arms, so there's no delay.
+/// Collapsed UI: a lozenge. Double-click the body to expand (or ⌥Space, or one click on
+/// the expand glyph); drag it to move — mirroring the header, where a double-click and the
+/// minimize glyph both collapse. One DragGesture serves body-tap and drag: a near-zero move
+/// on release is a tap, and two taps inside the system double-click interval expand. That
+/// can't live in `PanelWindow.mouseDown` like the header's does — the pill's gesture covers
+/// the whole window and swallows the event first. A single tap only arms, so there's no delay.
 struct PillView: View {
     @ObservedObject var store: NoteStore
     @State private var lastTap = Date.distantPast
+    @State private var expandHover = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -336,8 +337,19 @@ struct PillView: View {
             Text(store.selected.map { store.title(for: $0) } ?? "GitPad")
                 .font(.footnote.weight(.medium)).lineLimit(1)
             Spacer(minLength: 0)
-            Image(systemName: "arrow.up.left.and.arrow.down.right") // affordance hint
-                .font(.caption2).foregroundStyle(.tertiary)
+            // A real control, not just a hint: ONE click expands, the way the header's
+            // minimize glyph collapses in one. highPriorityGesture so it beats the
+            // pill-wide drag below, which would otherwise demand a double-click here too.
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.caption2).foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .background(expandHover ? Color.primary.opacity(0.08) : .clear,
+                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .contentShape(Rectangle())
+                .onHover { expandHover = $0 }
+                .animation(Motion.quick, value: expandHover)
+                .highPriorityGesture(TapGesture().onEnded { store.setPill?(false) })
+                .help("Expand")
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
