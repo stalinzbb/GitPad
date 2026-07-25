@@ -32,8 +32,12 @@ _Coming soon — the capture panel, the library, and the theme strip. (See [GROW
 
 ## Install
 
+**[Download the latest release](https://github.com/stalinzbb/GitPad/releases/latest)** — unzip and drag GitPad.app to Applications. Signed and notarized; a SHA-256 checksum is in every release's notes.
+
+Or build from source:
+
 ```bash
-git clone <this repo> && cd GitPad
+git clone https://github.com/stalinzbb/GitPad.git && cd GitPad
 ./build.sh                 # → GitPad.app
 cp -r GitPad.app /Applications/
 open /Applications/GitPad.app
