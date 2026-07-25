@@ -37,7 +37,19 @@ xcrun stapler staple GitPad.app
 rm "$ZIP"
 ditto -c -k --keepParent GitPad.app "$ZIP"
 
+# DMG: same stapled app, drag-to-Applications layout; the DMG itself gets its own
+# notarization ticket so Gatekeeper verifies it offline too
+DMG="GitPad-$VERSION.dmg"
+rm -rf dmg-stage "$DMG"
+mkdir dmg-stage && cp -R GitPad.app dmg-stage/ && ln -s /Applications dmg-stage/Applications
+hdiutil create -volname GitPad -srcfolder dmg-stage -ov -format UDZO "$DMG"
+rm -rf dmg-stage
+codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+xcrun notarytool submit "$DMG" --keychain-profile gitpad-notary --wait
+xcrun stapler staple "$DMG"
+
 spctl -a -vv GitPad.app
-echo "Release ready: $(pwd)/$ZIP (v$VERSION, notarized + stapled)"
+echo "Release ready: $(pwd)/$ZIP + $DMG (v$VERSION, notarized + stapled)"
 echo "SHA-256 (paste into the release notes so users can verify downloads):"
-shasum -a 256 "$ZIP"
+shasum -a 256 "$ZIP" "$DMG"
+echo "Remember: bump version + sha256 in stalinzbb/homebrew-tap Casks/gitpad.rb"
