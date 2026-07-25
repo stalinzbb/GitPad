@@ -48,7 +48,6 @@ open /Applications/GitPad.app
 ```
 
 Requires macOS 13+ and the Xcode command-line tools (`xcode-select --install`).
-Homebrew cask is on the roadmap.
 
 ## Shortcuts
 
