@@ -1,0 +1,24 @@
+name: CI
+# Build + the real end-to-end sync test. No signing here — releases run locally via release.sh.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# CI only reads code; never let a run's token write to the repo
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build -c release
+      - name: Git identity for test harness
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@gitpad.test
+      - name: Sync end-to-end tests
+        run: ./test_gitsync.sh
