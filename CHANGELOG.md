@@ -3,6 +3,46 @@
 All notable changes to GitPad. Dates are release dates; format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.2] — 2026-07-25 · first public beta
+
+The writing experience, rebuilt — plus fuzzy search and the open-source beta itself.
+(Ships everything listed under 0.9 and 0.9.1 below.)
+
+### Editor overhaul
+
+- **Hanging indents.** Wrapped list lines align under the item's text, and every
+  nest level gets a real visual indent instead of a ~7pt two-space shuffle.
+- **Display markers.** Bullets render • → ◦ → ▪ and ordered lists 1. → a. → i. by
+  depth — drawn over the markdown source, which stays plain `-` / `1. 2. 3.` on disk.
+- **Auto-renumbering.** Insert, delete, indent, paste, or undo inside a numbered
+  list and the ordinals fix themselves.
+- **Tab/Shift-Tab that behave**: caret and multi-line selections survive
+  indent/outdent, and Tab outside a list inserts spaces (never a code-block tab).
+- **Checkboxes redrawn.** ☐/☑ are pinned to a fixed layout advance (their fallback
+  fonts — emoji for ☑ — used to shift text and line height on every toggle), sized
+  to the body font with breathing room, and only the box itself toggles on click.
+- **Smart Backspace** removes a whole list or heading marker in one stroke.
+- **Enter** on an empty nested item outdents one level before exiting the list.
+- **Headings** get air above them; the `#` marker hides without the line jumping;
+  fresh notes open focused with a visible full-height caret in the title.
+- The selection toolbar stays inside the panel (it used to float above the window
+  for text near the top). Fixed a crash when it fired after the panel closed.
+
+### Features & fixes
+
+- **Fuzzy search** folds case and diacritics — "cafe" finds "Café".
+- Daily-note titles normalized (older daily notes backfilled).
+- Denser Library sidebar; pill gets a one-click expand glyph.
+- **⌘Q quits from any screen**, plus a quit button in Settings.
+- Checkbox variants from other editors (`* [X]`, `+ [ ]`) are recognized.
+
+### Project
+
+- Open-source beta: public repo, CI (build + full sync test suite) on every PR,
+  notarized releases via `release.sh` with a published SHA-256.
+- New `--uitest` harness drives the real editor headless (Tab/Enter/Backspace/
+  renumber/toggle) with layout assertions, wired into `test_gitsync.sh`.
+
 ## [0.9.1] — unreleased
 
 Cross-device sync, an icon that behaves, and setup that explains itself.
