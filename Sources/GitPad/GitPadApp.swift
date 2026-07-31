@@ -134,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         note.autoenablesItems = false // no responder validates our @objc actions → force-enable
         note.addItem(withTitle: "New Note", action: #selector(newNoteCmd), keyEquivalent: "n")
         note.addItem(withTitle: "Library", action: #selector(toggleLibraryCmd), keyEquivalent: "l")
-        note.addItem(withTitle: "Search Notes", action: #selector(searchNotesCmd), keyEquivalent: "k")
+        note.addItem(withTitle: "Command Palette", action: #selector(paletteCmd), keyEquivalent: "k")
         note.addItem(.separator())
         // saveCmd → saveNow → onSaved → backgroundSync: ⌘S has always synced too
         note.addItem(withTitle: "Save & Sync", action: #selector(saveCmd), keyEquivalent: "s")
@@ -315,7 +315,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func newNoteCmd() { store.newNote() }
     @objc func toggleLibraryCmd() { store.toggleLibrary() }
-    @objc func searchNotesCmd() { store.searchNotes() }
+    /// ⌘K toggles the palette. It never renders in the pill, so expand first; onboarding
+    /// is off-limits (same guard as the URL scheme).
+    @objc func paletteCmd() {
+        guard store.screen != .onboarding else { return }
+        if store.pill { store.setPill?(false) }
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        store.paletteOpen.toggle()
+    }
     @objc func saveCmd() { store.saveNow() }
     @objc func deleteNoteCmd() { store.deleteCurrent() }
     @objc func undoDeleteCmd() { store.undoDelete() }

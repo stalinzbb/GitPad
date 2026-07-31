@@ -15,6 +15,10 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
   change near `GitSync.sync` or `NoteStore` save/refresh. `GITPAD_DEVICE_NAME` overrides
   the commit author per invocation.
 - **Quick compile:** `swift build -c release`.
+- **Run a dev build safely:** every copy shares bundle id `com.stalinzbb.gitpad`, so `open
+  GitPad.app` may just activate an installed one. Launch the binary directly, and point it
+  at a scratch notes folder: `GITPAD_DIR=/tmp/gitpad-dev ./GitPad.app/Contents/MacOS/GitPad`.
+  Without `GITPAD_DIR` a dev build edits `~/Documents/GitPad` and syncs to the real remote.
 
 ## Source map (7 files, `Sources/GitPad/`)
 
