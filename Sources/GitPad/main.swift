@@ -126,6 +126,63 @@ if CommandLine.arguments.contains("--uitest") {
     spin()
     precondition(tv.string == "1. a\n2. c\n", tv.string)
 
+    // Selection bar: wrap() is a toggle, through both detection paths
+    (tv, coord) = makeEditor("hello world\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 5))
+    coord.wrap("**")
+    precondition(tv.string == "**hello** world\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 2, length: 5), "\(tv.selectedRange())")
+    coord.wrap("**") // marks around the selection → strip
+    precondition(tv.string == "hello world\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 0, length: 5), "\(tv.selectedRange())")
+    tv.setSelectedRange(NSRange(location: 0, length: 5))
+    coord.wrap("**")
+    tv.setSelectedRange(NSRange(location: 0, length: 9)) // "**hello**" — marks inside
+    coord.wrap("**")
+    precondition(tv.string == "hello world\n", tv.string)
+
+    // setHeading: set, clear, and re-level
+    (tv, coord) = makeEditor("a line\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 0))
+    coord.setHeading(2)
+    precondition(tv.string == "## a line\n", tv.string)
+    coord.setHeading(2)
+    precondition(tv.string == "a line\n", tv.string)
+    (tv, coord) = makeEditor("# Title\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 0))
+    coord.setHeading(2)
+    precondition(tv.string == "## Title\n", tv.string)
+
+    // makeList converts across families, toggles off, and lets renumber fix ordinals
+    (tv, coord) = makeEditor("☐ a\nplain\n☑ c\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 13))
+    coord.makeList("- ")
+    precondition(tv.string == "- a\n- plain\n- c\n", tv.string)
+    coord.makeList("- ") // all one family now → strip
+    precondition(tv.string == "a\nplain\nc\n", tv.string)
+    coord.makeList("1. ")
+    spin()
+    precondition(tv.string == "1. a\n2. plain\n3. c\n", tv.string)
+    // nesting survives the conversion (indent must not be duplicated)
+    (tv, coord) = makeEditor("  - x\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 5))
+    coord.makeList("☐ ")
+    precondition(tv.string == "  ☐ x\n", tv.string)
+
+    // converting to to-dos must not uncheck an existing ☑
+    (tv, coord) = makeEditor("☑ done\nplain\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 12))
+    coord.makeTodo()
+    precondition(tv.string == "☑ done\n☐ plain\n", tv.string)
+
+    // insertLink with nothing usable on the clipboard: empty parens, caret between them
+    NSPasteboard.general.clearContents()
+    (tv, coord) = makeEditor("docs\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 4))
+    coord.insertLink()
+    precondition(tv.string == "[docs]()\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 7, length: 0), "\(tv.selectedRange())")
+
     print("uitest OK")
     exit(0)
 }
