@@ -3,6 +3,45 @@
 All notable changes to GitPad. Dates are release dates; format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Features
+
+- **Command palette.** ⌘K from any screen: fuzzy-matched actions and note jumping,
+  plus Settings sub-sections, a shortcuts list, and leaner scrollbars. (#36)
+- **Bottom bar on the editor** — live word count on the left; pin, move-to-folder,
+  and delete on the right, so acting on the note you're writing no longer means a
+  trip to the Library. Delete routes through the same path as ⌘⌫, so the undo
+  banner still catches it. (#20, PR #33)
+- **Selection bar v2.** Bold/italic are real toggles (no more `****text****`),
+  plus H1/H2 headings, bullet/numbered/to-do lists that convert across families,
+  and link insertion that picks a URL up off the clipboard. The bar finally reads
+  the theme accent instead of OS blue. (#24, PR #32)
+
+### Bug fixes
+
+- **Undo actually undoes.** Four defects: the deferred list-renumber re-registered
+  during ⌘Z (undo ping-ponged and wiped redo), no-op Shift-Tab pushed an empty
+  undo group that swallowed a ⌘Z, wholesale text replacement left the undo stack
+  pointing at dead ranges, and ⌥Space could silently revert text typed within the
+  autosave debounce. Switching notes mid-debounce can no longer drop the outgoing
+  note's text. Known limit: a list edit is still two undo groups, so ⌘Z after
+  Enter-mid-list takes two presses — each makes progress. (#26, PR #31)
+- **Pill survives display changes.** The panel now watches screen-parameter
+  changes and clamps the pill (and expanded frame) back onto a live screen, so
+  unplugging a monitor no longer strands or mangles it. (#21, PR #30)
+- **Selecting a list line no longer reveals the markdown backing text** (`2.`,
+  `-`) behind the display markers — selection now recolors only the background,
+  not the glyphs. (#22, PR #29)
+
+### Project
+
+- `GITPAD_DIR` env var points a dev build at a throwaway notes folder, so
+  verifying anything near autosave/sync doesn't touch real notes or the real
+  remote. Documented in `CLAUDE.md`. UserDefaults (hotkey, theme, pins) are
+  still shared. (PR #28)
+- Release artifacts (`*.dmg`, `*.zip`) gitignored. (#27)
+
 ## [0.9.2] — 2026-07-25 · first public beta
 
 The writing experience, rebuilt — plus fuzzy search and the open-source beta itself.
