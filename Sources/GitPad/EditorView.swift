@@ -455,10 +455,11 @@ struct CommandPalette: View {
                     .padding(.horizontal, 8)
                     .padding(.top, i == 0 ? 2 : 9).padding(.bottom, 3)
             } else if i > 0 {
-                // an explicit hairline: Divider at 0.4 all but vanished on the material
+                // an explicit hairline: Divider at 0.4 all but vanished on the material.
+                // -6 cancels the list's own inset so it runs edge to edge of the card.
                 Rectangle().fill(Color.primary.opacity(0.14))
                     .frame(height: 1)
-                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .padding(.horizontal, -6).padding(.vertical, 8)
             }
         }
     }
