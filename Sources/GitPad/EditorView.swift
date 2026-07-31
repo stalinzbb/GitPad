@@ -1776,6 +1776,10 @@ struct MarkdownTextView: NSViewRepresentable {
         tv.isAutomaticDashSubstitutionEnabled = false // keep "---" as typed → divider
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
+        // Highlight only — no .foregroundColor. AppKit's default recolors selected glyphs,
+        // which un-hides the `.clear` backing markers ("2." showing under the drawn "b.").
+        // Keeping stored colors is also what Notes/Xcode do.
+        tv.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         tv.delegate = context.coordinator
         storage.delegate = context.coordinator
         context.coordinator.textView = tv
