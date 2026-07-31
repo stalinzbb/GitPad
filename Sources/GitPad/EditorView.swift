@@ -773,9 +773,50 @@ struct CaptureView: View {
                              fontSize: CGFloat(editorFontSize),
                              design: fontDesign,
                              themeID: themeID)
+
+            bottomBar
         }
         // ⌘N/⌘L/⌘S/⌘⌫/⌘M/⌘, are handled by the main-menu "Note" submenu in AppDelegate,
         // so they work from every screen — not just here.
+    }
+
+    /// Pin / move / delete without a round-trip to the Library's ⋯ menu, plus a live word
+    /// count. Editor screen only — the Library already has all three on every row.
+    /// The header is deliberately untouched: nothing moved out of it, it stays 42pt.
+    private var bottomBar: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.4)
+            HStack(spacing: 2) {
+                Text("\(wordCount) words")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.leading, 6)
+                Spacer(minLength: 0)
+                if let sel = store.selected {
+                    ChromeIcon(symbol: store.isPinned(sel) ? "pin.fill" : "pin",
+                               help: store.isPinned(sel) ? "Unpin" : "Pin") { store.togglePin(sel) }
+                    Menu {
+                        Button("Notes") { store.move(sel, to: nil) }
+                        ForEach(store.folders, id: \.self) { f in
+                            Button(f) { store.move(sel, to: f) }
+                        }
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: ChromeIcon.side, height: ChromeIcon.side)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                    .foregroundStyle(.secondary)
+                    .help("Move to folder")
+                    ChromeIcon(symbol: "trash", help: "Delete (⌘⌫)") { store.deleteCurrent() }
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 2)
+        }
+    }
+
+    private var wordCount: Int {
+        store.text.split(whereSeparator: \.isWhitespace).count
     }
 
     /// Nag only when sync is *broken*: a deliberate local-only setup (.noRemote) never nags.
