@@ -99,6 +99,7 @@ struct OnboardingView: View {
 /// Step-by-step git sync onboarding, reachable any time from Settings.
 struct GitSetupView: View {
     @ObservedObject var store: NoteStore
+    @Environment(\.theme) private var theme
     @State private var remote = ""
     @State private var result: String?
     @State private var working = false
@@ -170,7 +171,7 @@ struct GitSetupView: View {
             Text("\(n)")
                 .font(.caption.weight(.bold))
                 .frame(width: 20, height: 20)
-                .background(Color.accentColor.opacity(0.15), in: Circle())
+                .background(theme.selection, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.callout.weight(.medium))
                 Text(detail).font(.caption).foregroundStyle(.secondary)

@@ -321,10 +321,7 @@ struct CommandPalette: View {
         .padding(.horizontal, 8).padding(.vertical, 4)
         // hover is its own, lighter state — it deliberately does NOT move `index`
         // (see the note on `hovered`), so the two can show at once
-        .background(i == index ? Color.accentColor.opacity(0.18)
-                               : (hovered == i ? Color.primary.opacity(0.06) : .clear),
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .contentShape(Rectangle())
+        .rowBackground(selected: i == index, hovering: hovered == i)
         .onHover { inside in
             if inside { hovered = i } else if hovered == i { hovered = nil }
         }
@@ -1291,9 +1288,7 @@ struct LibraryView: View {
                 .font(.callout)
                 .frame(maxWidth: .infinity, minHeight: railSlot, alignment: .leading) // match folder-row height
                 .padding(.horizontal, 10).padding(.vertical, 3)
-                .background(source == s ? Color.accentColor.opacity(0.18) : .clear,
-                            in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
+                .rowBackground(selected: source == s)
         }
         .buttonStyle(.plain)
     }
@@ -1378,10 +1373,7 @@ struct FolderRailRow: View {
             .frame(width: railSlot, height: railSlot)
         }
         .padding(.horizontal, 10).padding(.vertical, 3)
-        .background(selected ? Color.accentColor.opacity(0.18)
-                             : (hovering ? Color.primary.opacity(0.05) : .clear),
-                    in: RoundedRectangle(cornerRadius: 6))
-        .contentShape(Rectangle())
+        .rowBackground(selected: selected, hovering: hovering)
         .onTapGesture(perform: select)
         .onHover { hovering = $0 }
         .animation(Motion.quick, value: hovering)
