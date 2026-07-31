@@ -2318,6 +2318,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         @objc private func showActions() {
             guard let tv = textView, tv.window != nil, tv.selectedRange().length > 0,
+                  tv.window?.firstResponder === tv, // no bar while the ⌘K palette holds focus
                   NSEvent.pressedMouseButtons == 0,
                   let lm = tv.layoutManager, let tc = tv.textContainer else { return }
             if actionPopover.contentViewController == nil {
@@ -2337,43 +2338,141 @@ struct MarkdownTextView: NSViewRepresentable {
             actionPopover.show(relativeTo: rect, of: tv, preferredEdge: below ? .minY : .maxY)
         }
 
+        /// Toggle, not just wrap: the mark comes off text that already carries it, so a
+        /// second tap on Bold un-bolds instead of producing `****text****`. The selection
+        /// survives either way (kept on the plain text) so taps keep toggling.
+        /// ponytail: `*` on a `**x**` selection strips one pair — bold becomes italic
+        /// rather than nesting. Nesting the same family is the rarer intent.
         func wrap(_ mark: String) {
             guard let tv = textView else { return }
+            let ns = tv.string as NSString
             let sel = tv.selectedRange()
-            let s = (tv.string as NSString).substring(with: sel)
-            tv.insertText(mark + s + mark, replacementRange: sel)
+            let s = ns.substring(with: sel)
+            let n = (mark as NSString).length
+
+            if sel.length >= 2 * n, s.hasPrefix(mark), s.hasSuffix(mark) { // marks inside the selection
+                let inner = (s as NSString).substring(with: NSRange(location: n, length: sel.length - 2 * n))
+                if replaceText(tv, sel, inner) {
+                    tv.setSelectedRange(NSRange(location: sel.location, length: sel.length - 2 * n))
+                }
+            } else if sel.location >= n, sel.location + sel.length + n <= ns.length, // marks around it
+                      ns.substring(with: NSRange(location: sel.location - n, length: n)) == mark,
+                      ns.substring(with: NSRange(location: sel.location + sel.length, length: n)) == mark {
+                let wide = NSRange(location: sel.location - n, length: sel.length + 2 * n)
+                if replaceText(tv, wide, s) {
+                    tv.setSelectedRange(NSRange(location: wide.location, length: sel.length))
+                }
+            } else if replaceText(tv, sel, mark + s + mark) {
+                tv.setSelectedRange(NSRange(location: sel.location + n, length: sel.length))
+            }
             actionPopover.performClose(nil)
         }
 
-        func makeTodo() {
+        func makeTodo() { makeList("☐ ") }
+
+        /// Convert the selected paragraphs to a `prefix` list. Every line already in that
+        /// marker family → strip back to plain text, so the button toggles. `"1. "` inserts
+        /// the literal prefix and lets the deferred renumber pass fix the ordinals.
+        func makeList(_ prefix: String) {
             guard let tv = textView else { return }
             let ns = tv.string as NSString
             let para = ns.paragraphRange(for: tv.selectedRange())
-            let lines = ns.substring(with: para)
-                .components(separatedBy: "\n")
-                .map { line -> String in
-                    guard !line.isEmpty else { return line }
-                    // an existing list marker converts in place (was: "☐ - foo"); checkboxes stay
-                    if let m = ListLogic.match(line) {
-                        let lns = line as NSString
-                        let marker = m.range(at: 2).location != NSNotFound ? lns.substring(with: m.range(at: 2)) : ""
-                        if marker == "☐" || marker == "☑" { return line }
-                        return lns.substring(with: m.range(at: 1)) + "☐ " + lns.substring(with: m.range(at: 4))
-                    }
-                    return "☐ " + line
+            let lines = ns.substring(with: para).components(separatedBy: "\n")
+            let filled = lines.filter { !$0.isEmpty }
+            let strip = !filled.isEmpty && filled.allSatisfy { Self.inFamily($0, prefix) }
+
+            let out = lines.map { line -> String in
+                guard !line.isEmpty else { return line }
+                let (indent, body) = Self.split(line)
+                guard !Self.inFamily(line, prefix) else {
+                    // already ours: strip it, or leave it alone so ☑ keeps its check
+                    return strip ? indent + body : line
                 }
-                .joined(separator: "\n")
-            tv.insertText(lines, replacementRange: para)
+                // an existing marker of another family converts in place (was: "☐ - foo")
+                return indent + prefix + body
+            }.joined(separator: "\n")
+
+            if replaceText(tv, para, out) {
+                tv.setSelectedRange(NSRange(location: para.location, length: (out as NSString).length))
+            }
             actionPopover.performClose(nil)
+        }
+
+        /// Set a heading on every selected line; the same level again clears it.
+        /// One `replaceText` over the whole paragraph range → one undo step, no grouping.
+        func setHeading(_ level: Int) {
+            guard let tv = textView else { return }
+            let ns = tv.string as NSString
+            let para = ns.paragraphRange(for: tv.selectedRange())
+            let want = String(repeating: "#", count: level) + " "
+            let lines = ns.substring(with: para).components(separatedBy: "\n")
+            let filled = lines.filter { !$0.isEmpty }
+            let strip = !filled.isEmpty && filled.allSatisfy { $0.hasPrefix(want) }
+
+            let out = lines.map { line -> String in
+                guard !line.isEmpty else { return line }
+                let lns = line as NSString
+                var plain = line
+                if let h = Self.headingPrefix.firstMatch(in: line,
+                        range: NSRange(location: 0, length: lns.length)) {
+                    plain = lns.substring(from: h.range.length)
+                }
+                return strip ? plain : want + plain
+            }.joined(separator: "\n")
+
+            if replaceText(tv, para, out) {
+                tv.setSelectedRange(NSRange(location: para.location, length: (out as NSString).length))
+            }
+            actionPopover.performClose(nil)
+        }
+
+        /// `[selection](url)`. A URL sitting on the clipboard fills the target — otherwise the
+        /// parens are left empty with the caret inside them, ready to type.
+        func insertLink() {
+            guard let tv = textView else { return }
+            let sel = tv.selectedRange()
+            let s = (tv.string as NSString).substring(with: sel)
+            let clip = (NSPasteboard.general.string(forType: .string) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (clip.hasPrefix("http://") || clip.hasPrefix("https://")) ? clip : ""
+            if replaceText(tv, sel, "[\(s)](\(url))") {
+                let caret = sel.location + (s as NSString).length + 3 + (url as NSString).length
+                tv.setSelectedRange(NSRange(location: caret, length: 0)) // before the ")"
+            }
+            actionPopover.performClose(nil)
+        }
+
+        /// (leading whitespace, text after any list marker) — so a line converts in place
+        /// between families instead of stacking markers.
+        static func split(_ line: String) -> (indent: String, body: String) {
+            guard let m = ListLogic.match(line) else { return ("", line) }
+            let ns = line as NSString
+            return (ns.substring(with: m.range(at: 1)), ns.substring(with: m.range(at: 4)))
+        }
+
+        /// Is the line already this prefix's marker family? ☐ and ☑ are one family (so
+        /// converting to to-dos never unchecks anything), and any ordinal counts as "1. ".
+        static func inFamily(_ line: String, _ prefix: String) -> Bool {
+            guard let m = ListLogic.match(line) else { return false }
+            if prefix == "1. " { return m.range(at: 3).location != NSNotFound }
+            guard m.range(at: 2).location != NSNotFound else { return false }
+            let bullet = (line as NSString).substring(with: m.range(at: 2))
+            if prefix == "☐ " { return bullet == "☐" || bullet == "☑" }
+            return bullet == String(prefix.dropLast())
         }
     }
 }
 
+/// The selection bar: inline marks | headings | list conversions | link.
+/// Lives in its own NSHostingController (the popover's), so it inherits nothing from
+/// EditorView's view tree — including the `.tint` that themes every other control.
 struct ActionBar: View {
     let coordinator: MarkdownTextView.Coordinator
 
     /// ChromeIcon, not bespoke buttons: it already carries the house hover background,
     /// glyph size/weight and tooltip, so the selection menu matches every other control.
+    /// Headings reuse the slash menu's own Title/Subtitle glyphs — same action reached two
+    /// ways shouldn't wear two icons — and the dividers group marks / headings / lists.
     var body: some View {
         HStack(spacing: 2) {
             ChromeIcon(symbol: "bold", help: "Bold") { coordinator.wrap("**") }
@@ -2381,10 +2480,20 @@ struct ActionBar: View {
             ChromeIcon(symbol: "strikethrough", help: "Strikethrough") { coordinator.wrap("~~") }
             ChromeIcon(symbol: "chevron.left.forwardslash.chevron.right",
                        help: "Inline code") { coordinator.wrap("`") }
+            rule
+            ChromeIcon(symbol: "textformat.size", help: "Title") { coordinator.setHeading(1) }
+            ChromeIcon(symbol: "textformat", help: "Subtitle") { coordinator.setHeading(2) }
+            rule
+            ChromeIcon(symbol: "list.bullet", help: "Bullet list") { coordinator.makeList("- ") }
+            ChromeIcon(symbol: "list.number", help: "Numbered list") { coordinator.makeList("1. ") }
             ChromeIcon(symbol: "checklist", help: "Checklist") { coordinator.makeTodo() }
+            rule
+            ChromeIcon(symbol: "link", help: "Link") { coordinator.insertLink() }
         }
         .padding(.horizontal, 6).padding(.vertical, 4)
     }
+
+    private var rule: some View { Divider().frame(height: 14) }
 }
 
 /// Draws a full-width rule for `---` lines and a real checkbox for ☐/☑
