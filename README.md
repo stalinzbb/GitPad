@@ -33,6 +33,7 @@ _Coming soon — the capture panel, the library, and the theme strip. (See [GROW
 ## Install
 
 ```bash
+brew trust stalinzbb/tap    # newer Homebrew requires trusting third-party taps once
 brew install --cask stalinzbb/tap/gitpad
 ```
 
