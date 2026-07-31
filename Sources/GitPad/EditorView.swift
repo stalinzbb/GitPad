@@ -436,9 +436,9 @@ struct CommandPalette: View {
                     }
                 }
                 .padding(6)
+                .background(LeanScrollbar()) // inside the content → enclosingScrollView hits
             }
             .frame(maxHeight: 380)
-            .background(LeanScrollbar())
             .onChange(of: index) { proxy.scrollTo($0, anchor: .center) }
         }
     }
@@ -455,8 +455,10 @@ struct CommandPalette: View {
                     .padding(.horizontal, 8)
                     .padding(.top, i == 0 ? 2 : 9).padding(.bottom, 3)
             } else if i > 0 {
-                Divider().opacity(0.4)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
+                // an explicit hairline: Divider at 0.4 all but vanished on the material
+                Rectangle().fill(Color.primary.opacity(0.14))
+                    .frame(height: 1)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
             }
         }
     }
@@ -632,24 +634,26 @@ struct PillView: View {
     }
 }
 
-/// A 9pt-wide scroller with no slot line and a 4pt capsule knob. AppKit's stock knob is
-/// 7pt inside a 17pt gutter and paints a track the moment it expands — too much furniture
-/// for a 400pt panel. Width is the only layout-affecting override, so legacy (always-shown)
-/// scrollers get the same slim treatment instead of being forced to overlay behind the
-/// user's back.
+/// A 5pt capsule knob and no track line. Drawing is the ONLY thing overridden — an
+/// earlier version also narrowed the scroller to 9pt, which pushed the knob into the
+/// panel's rounded mask (it read as cut off at the ends) and fought the overlay
+/// scroller's expand animation. Standard geometry costs nothing: overlay scrollers
+/// float above the content, so the gutter takes no layout width either way.
 final class LeanScroller: NSScroller {
     override class var isCompatibleWithOverlayScrollers: Bool { true }
-
-    override class func scrollerWidth(for controlSize: NSControl.ControlSize,
-                                      scrollerStyle: NSScroller.Style) -> CGFloat { 9 }
 
     override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {} // no track line
 
     override func drawKnob() {
-        let r = rect(for: .knob).insetBy(dx: 2.5, dy: 2)
-        guard r.width > 0, r.height > 0 else { return }
+        guard bounds.height >= bounds.width else { return super.drawKnob() } // vertical only
+        let knob = rect(for: .knob)
+        let width: CGFloat = 5
+        // centred in the scroller, so it clears the window's corner radius at both ends
+        let r = NSRect(x: bounds.midX - width / 2, y: knob.minY + 2,
+                       width: width, height: knob.height - 4)
+        guard r.height > 0 else { return }
         NSColor.secondaryLabelColor.withAlphaComponent(0.55).setFill()
-        NSBezierPath(roundedRect: r, xRadius: r.width / 2, yRadius: r.width / 2).fill()
+        NSBezierPath(roundedRect: r, xRadius: width / 2, yRadius: width / 2).fill()
     }
 }
 
@@ -671,19 +675,29 @@ struct LeanScrollbar: NSViewRepresentable {
             guard window != nil else { return }
             // async: the sibling scroll view isn't built yet on the first pass
             DispatchQueue.main.async { [weak self] in
-                guard let start = self?.superview else { return }
+                guard let self else { return }
+                // placed inside the scrolling content → exact hit, no searching
+                if let sv = self.enclosingScrollView {
+                    Swapper.install(in: sv)
+                    return
+                }
+                guard let start = self.superview else { return }
                 var node: NSView? = start
                 for _ in 0..<6 { // bounded, so we can't wander into an unrelated screen
                     guard let n = node else { return }
                     if let sv = Swapper.firstScrollView(in: n) {
-                        guard !(sv.verticalScroller is LeanScroller) else { return }
-                        sv.verticalScroller = LeanScroller()
-                        sv.tile() // else the swapped-in scroller lays out 0pt wide
+                        Swapper.install(in: sv)
                         return
                     }
                     node = n.superview
                 }
             }
+        }
+
+        static func install(in sv: NSScrollView) {
+            guard !(sv.verticalScroller is LeanScroller) else { return }
+            sv.verticalScroller = LeanScroller()
+            sv.tile() // else the swapped-in scroller lays out 0pt wide
         }
 
         static func firstScrollView(in view: NSView) -> NSScrollView? {
