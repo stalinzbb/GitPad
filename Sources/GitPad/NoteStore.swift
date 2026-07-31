@@ -56,8 +56,12 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// ⌘K: Library with the search field focused. The counter is the signal — it also
-    /// re-focuses when the Library is already open (where `onAppear` won't fire again).
+    /// ⌘K: the command palette overlay (see `CommandPalette`). Rendered above every screen.
+    @Published var paletteOpen = false
+
+    /// Library with the search field focused — the palette's "Search Library" command.
+    /// The counter is the signal, so it also re-focuses when the Library is already open
+    /// (where `onAppear` won't fire again).
     @Published var searchRequest = 0
     func searchNotes() {
         screen = .library

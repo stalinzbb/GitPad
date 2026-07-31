@@ -124,8 +124,13 @@ struct EditorView: View {
                 UndoDeleteBanner(store: store)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if !store.pill, store.paletteOpen, store.screen != .onboarding {
+                CommandPalette(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
         }
         .animation(Motion.quick, value: store.lastDeleted?.original)
+        .animation(Motion.quick, value: store.paletteOpen)
         .tint(theme.accentSwift) // buttons/toggles/sliders/selection take the theme accent
         .overlay( // hairline edge; material below dims itself when the window loses key
             RoundedRectangle(cornerRadius: store.pill ? 20 : 14, style: .continuous)
@@ -264,6 +269,276 @@ struct UndoDeleteBanner: View {
     }
 }
 
+/// One palette entry. A static array, not menu-derived: half these commands
+/// (Sync Now, Set Up Sync, Reveal in Finder) live in the status menu or no menu at all.
+/// `group` is the section header the row sits under, in array order.
+struct PaletteCommand {
+    let group: String
+    let title: String
+    let symbol: String
+    var keys: String = ""
+    let run: () -> Void
+}
+
+/// A key combo you can actually read: the same chip the hotkey recorder uses, so the
+/// palette, the shortcuts table and Settings all render a binding identically.
+struct KeyChip: View {
+    let keys: String
+
+    var body: some View {
+        Text(keys)
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.primary.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+}
+
+/// Section label, matching the Library's group headers.
+struct SectionLabel: View {
+    let text: String
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            .tracking(0.6)
+    }
+}
+
+/// ⌘K: one field over every command plus note search, floating above whatever screen
+/// is showing. Enter runs the highlighted row; Esc (or the scrim) closes.
+struct CommandPalette: View {
+    @ObservedObject var store: NoteStore
+    @State private var query = ""
+    @State private var index = 0
+    /// Hover highlights, but never moves the keyboard selection. Letting it drive `index`
+    /// is the usual palette bug: the pointer sits still, ↓ scrolls a different row under
+    /// it, that row fires onHover and steals the selection back.
+    @State private var hovered: Int?
+    @State private var monitor: Any?
+    @FocusState private var focused: Bool
+
+    /// Commands index into `commands`; notes carry their URL.
+    private enum Item {
+        case cmd(Int)
+        case note(URL)
+    }
+
+    private var commands: [PaletteCommand] {
+        var c: [PaletteCommand] = [
+            PaletteCommand(group: "Notes", title: "New Note",
+                           symbol: ChromeGlyph.newNote, keys: "⌘N") { store.newNote() },
+            PaletteCommand(group: "Notes", title: "Open Daily Note",
+                           symbol: "calendar") { store.open(store.dailyNote()) },
+            PaletteCommand(group: "Notes", title: "Append Clipboard to Daily",
+                           symbol: "doc.on.clipboard") {
+                guard let clip = NSPasteboard.general.string(forType: .string),
+                      !clip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                store.open(store.dailyNote())
+                store.appendToDaily(clip)
+            },
+            PaletteCommand(group: "Notes", title: "Delete Note",
+                           symbol: "trash", keys: "⌘⌫") { store.deleteCurrent() },
+        ]
+        if store.lastDeleted != nil {
+            c.append(PaletteCommand(group: "Notes", title: "Undo Delete",
+                                    symbol: "arrow.uturn.backward") { store.undoDelete() })
+        }
+        c += [
+            // ⌘L is a toggle, so name it for where it actually goes from here
+            PaletteCommand(group: "Go", title: store.screen == .library ? "Back to Note" : "Library",
+                           symbol: store.screen == .library ? ChromeGlyph.back : ChromeGlyph.library,
+                           keys: "⌘L") { store.toggleLibrary() },
+            PaletteCommand(group: "Go", title: "Search Library",
+                           symbol: "magnifyingglass") { store.searchNotes() },
+            PaletteCommand(group: "Go", title: "Settings",
+                           symbol: ChromeGlyph.settings, keys: "⌘,") { store.openSettings() },
+            PaletteCommand(group: "Go", title: "Reveal Notes in Finder", symbol: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([store.dir])
+            },
+            PaletteCommand(group: "Sync", title: "Save & Sync",
+                           symbol: "square.and.arrow.down", keys: "⌘S") { store.saveNow() },
+            PaletteCommand(group: "Sync", title: "Sync Now",
+                           symbol: "arrow.clockwise") { store.requestSync?() },
+            PaletteCommand(group: "Sync", title: "Set Up Sync",
+                           symbol: "arrow.triangle.branch") { store.screen = .gitSetup },
+            PaletteCommand(group: "Window", title: "Minimize to Pill",
+                           symbol: ChromeGlyph.minimize, keys: "⌘M") { store.setPill?(true) },
+        ]
+        return c
+    }
+
+    /// Commands first, then notes. Notes reuse the Library's own ranking verbatim.
+    private var items: [Item] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let cmds: [Int]
+        if q.isEmpty {
+            cmds = Array(commands.indices)
+        } else {
+            let tokens = NoteStore.fold(q).split(whereSeparator: \.isWhitespace).map(String.init)
+            let all = commands
+            cmds = all.indices.filter { i in
+                let t = NoteStore.fold(all[i].title)
+                return tokens.allSatisfy { t.contains($0) }
+            }
+        }
+        let notes = q.isEmpty ? Array(store.notes.prefix(5)) : Array(store.matches(q).prefix(8))
+        return cmds.map(Item.cmd) + notes.map(Item.note)
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.25)
+                .onTapGesture { store.paletteOpen = false }
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "command").foregroundStyle(.secondary)
+                    TextField("Run a command or find a note…", text: $query)
+                        .textFieldStyle(.plain)
+                        .focused($focused)
+                        .onSubmit(runSelected)
+                        .onExitCommand { store.paletteOpen = false } // beats PanelWindow.cancelOperation
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                Divider().opacity(0.4)
+                list
+            }
+            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .padding(.horizontal, 12).padding(.top, 44)
+        }
+        .onAppear {
+            focused = true
+            // The focused text field's field editor swallows ↑/↓, so `.onMoveCommand`
+            // never fires. Same local-monitor trick as HotkeyRecorder, scoped to the
+            // palette's lifetime — everything else passes straight through.
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                switch Int(event.keyCode) {
+                case kVK_UpArrow: move(-1); return nil
+                case kVK_DownArrow: move(1); return nil
+                default: return event
+                }
+            }
+        }
+        .onDisappear {
+            if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        }
+        .onChange(of: query) { _ in index = 0 }
+    }
+
+    private var list: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                let rows = items
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(rows.indices, id: \.self) { i in
+                        separator(before: i, in: rows)
+                        row(rows[i], i)
+                    }
+                }
+                .padding(6)
+                .background(LeanScrollbar()) // inside the content → enclosingScrollView hits
+            }
+            .frame(maxHeight: 380)
+            // nil anchor = scroll the minimum to reveal the row. `.center` re-centred on
+            // every keypress, so the first ↓ yanked the whole list down to centre row 1.
+            .onChange(of: index) { proxy.scrollTo($0) }
+        }
+    }
+
+    /// What goes above a row when its group changes: a hairline between command groups
+    /// (they're self-evident — labelling four of them just adds furniture), and a real
+    /// header for the notes, which do need saying. Emitted inline so `index` keeps
+    /// addressing selectable rows only.
+    @ViewBuilder private func separator(before i: Int, in rows: [Item]) -> some View {
+        let isNote: Bool = { if case .note = rows[i] { return true }; return false }()
+        if i == 0 || group(rows[i]) != group(rows[i - 1]) {
+            if isNote {
+                SectionLabel(text: group(rows[i]))
+                    .padding(.horizontal, 8)
+                    .padding(.top, i == 0 ? 2 : 9).padding(.bottom, 3)
+            } else if i > 0 {
+                // an explicit hairline: Divider at 0.4 all but vanished on the material.
+                // -6 cancels the list's own inset so it runs edge to edge of the card.
+                Rectangle().fill(Color.primary.opacity(0.14))
+                    .frame(height: 1)
+                    .padding(.horizontal, -6).padding(.vertical, 8)
+            }
+        }
+    }
+
+    private func row(_ item: Item, _ i: Int) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol(item))
+                .font(.system(size: 13, weight: .medium)) // same glyph weight as the chrome
+                .frame(width: 18)
+                .foregroundStyle(.secondary)
+            Text(label(item)).font(.callout).lineLimit(1)
+            Spacer(minLength: 8)
+            if case .cmd(let c) = item, !commands[c].keys.isEmpty {
+                KeyChip(keys: commands[c].keys)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        // hover is its own, lighter state — it deliberately does NOT move `index`
+        // (see the note on `hovered`), so the two can show at once
+        .background(i == index ? Color.accentColor.opacity(0.18)
+                               : (hovered == i ? Color.primary.opacity(0.06) : .clear),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { inside in
+            if inside { hovered = i } else if hovered == i { hovered = nil }
+        }
+        .animation(Motion.quick, value: hovered)
+        .onTapGesture { run(item) }
+        .id(i)
+    }
+
+    private func label(_ item: Item) -> String {
+        switch item {
+        case .cmd(let i): return commands[i].title
+        case .note(let url): return store.title(for: url)
+        }
+    }
+
+    private func symbol(_ item: Item) -> String {
+        switch item {
+        case .cmd(let i): return commands[i].symbol
+        case .note: return "doc.text"
+        }
+    }
+
+    private func group(_ item: Item) -> String {
+        switch item {
+        case .cmd(let i): return commands[i].group
+        case .note: return query.trimmingCharacters(in: .whitespaces).isEmpty ? "Recent" : "Matches"
+        }
+    }
+
+    private func move(_ delta: Int) {
+        let count = items.count
+        guard count > 0 else { return }
+        index = min(max(0, index + delta), count - 1)
+    }
+
+    private func runSelected() {
+        let rows = items
+        guard rows.indices.contains(index) else { return }
+        run(rows[index])
+    }
+
+    private func run(_ item: Item) {
+        store.paletteOpen = false
+        switch item {
+        case .cmd(let i): commands[i].run()
+        case .note(let url): store.open(url)
+        }
+    }
+}
+
 /// Standard header: a screen-specific left slot + the persistent right cluster
 /// (Settings · Minimize · Close) available on every screen.
 struct ChromeBar<L: View>: View {
@@ -370,6 +645,82 @@ struct PillView: View {
                 }
         )
         .help("Double-click to expand (\(Hotkey.display))")
+    }
+}
+
+/// A 5pt capsule knob and no track line. Drawing is the ONLY thing overridden — an
+/// earlier version also narrowed the scroller to 9pt, which pushed the knob into the
+/// panel's rounded mask (it read as cut off at the ends) and fought the overlay
+/// scroller's expand animation. Standard geometry costs nothing: overlay scrollers
+/// float above the content, so the gutter takes no layout width either way.
+final class LeanScroller: NSScroller {
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {} // no track line
+
+    override func drawKnob() {
+        guard bounds.height >= bounds.width else { return super.drawKnob() } // vertical only
+        let knob = rect(for: .knob)
+        let width: CGFloat = 5
+        // centred in the scroller, so it clears the window's corner radius at both ends
+        let r = NSRect(x: bounds.midX - width / 2, y: knob.minY + 2,
+                       width: width, height: knob.height - 4)
+        guard r.height > 0 else { return }
+        NSColor.secondaryLabelColor.withAlphaComponent(0.55).setFill()
+        NSBezierPath(roundedRect: r, xRadius: width / 2, yRadius: width / 2).fill()
+    }
+}
+
+/// Give a SwiftUI ScrollView/List/Form the same lean scroller: `.background(LeanScrollbar())`
+/// on the scrolling container.
+///
+/// The work happens in `viewDidMoveToWindow`, NOT `updateNSView` — SwiftUI never calls
+/// update on a `.background()` representable, so an update-based version is dead code.
+/// SwiftUI also wraps the helper in its own host view, so the scroll view is never a
+/// sibling: climb ancestors until one of them contains it. Nothing private; a miss just
+/// leaves the stock scroller in place.
+struct LeanScrollbar: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Swapper(frame: .zero) }
+    func updateNSView(_ v: NSView, context: Context) {}
+
+    final class Swapper: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            // async: the sibling scroll view isn't built yet on the first pass
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // placed inside the scrolling content → exact hit, no searching
+                if let sv = self.enclosingScrollView {
+                    Swapper.install(in: sv)
+                    return
+                }
+                guard let start = self.superview else { return }
+                var node: NSView? = start
+                for _ in 0..<6 { // bounded, so we can't wander into an unrelated screen
+                    guard let n = node else { return }
+                    if let sv = Swapper.firstScrollView(in: n) {
+                        Swapper.install(in: sv)
+                        return
+                    }
+                    node = n.superview
+                }
+            }
+        }
+
+        static func install(in sv: NSScrollView) {
+            guard !(sv.verticalScroller is LeanScroller) else { return }
+            sv.verticalScroller = LeanScroller()
+            sv.tile() // else the swapped-in scroller lays out 0pt wide
+        }
+
+        static func firstScrollView(in view: NSView) -> NSScrollView? {
+            if let sv = view as? NSScrollView { return sv }
+            for sub in view.subviews {
+                if let hit = firstScrollView(in: sub) { return hit }
+            }
+            return nil
+        }
     }
 }
 
@@ -494,6 +845,14 @@ struct SettingsView: View {
     @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
 
+    /// Local state, deliberately NOT new `Screen` cases: those would multiply the
+    /// `goBack()` / settingsReturn branches for nothing. Esc and ⌘, keep working as-is;
+    /// the tab just resets to General after a Setup-guide round trip.
+    enum Tab: String, CaseIterable {
+        case general = "General", appearance = "Appearance", shortcuts = "Shortcuts", sync = "Sync"
+    }
+    @State private var tab: Tab = .general
+
     // (tag, label) — system designs plus Apple-bundled note-friendly fonts.
     // Nothing here ships with the app, so open-sourcing stays clean.
     static let fonts: [(String, String)] = [
@@ -515,7 +874,16 @@ struct SettingsView: View {
                 ChromeIcon(symbol: ChromeGlyph.back, help: "Back (Esc)") { store.goBack() }
             }
 
+            Picker("Section", selection: $tab) {
+                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12).padding(.bottom, 4)
+
             Form {
+                switch tab {
+                case .general:
                 Section("Editor") {
                     Picker("Font", selection: $fontDesign) {
                         ForEach(Self.fonts, id: \.0) { tag, label in
@@ -538,9 +906,54 @@ struct SettingsView: View {
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
                 }
+                Section {
+                    Button(role: .destructive) {
+                        NSApp.terminate(nil)
+                    } label: {
+                        Label("Quit GitPad", systemImage: "power")
+                    }
+                } footer: {
+                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                case .appearance:
+                Section {
+                    LabeledContent("Theme") {
+                        HStack(spacing: 12) {
+                            ForEach(Theme.all) { t in
+                                Button { themeID = t.id } label: {
+                                    Circle().fill(t.swatchBg)
+                                        .frame(width: 26, height: 26)
+                                        .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
+                                        .overlay(themeID == t.id
+                                            ? Image(systemName: "checkmark")
+                                                .font(.system(size: 8, weight: .bold))
+                                                .foregroundStyle(.white)
+                                            : nil)
+                                        .overlay(Circle().strokeBorder(
+                                            Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
+                                            lineWidth: themeID == t.id ? 2 : 1))
+                                        .animation(Motion.quick, value: themeID)
+                                }
+                                .buttonStyle(.plain)
+                                .help(t.id)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } footer: {
+                    Text("Changes apply immediately — there's no Save button.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                case .shortcuts:
                 Section("Global Hotkey") {
                     HotkeyRecorder()
                 }
+                ShortcutsList()
+
+                case .sync:
                 Section {
                     HStack {
                         TextField("git@github.com:you/notes.git", text: $remote)
@@ -591,49 +1004,11 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Section {
-                    LabeledContent("Theme") {
-                        HStack(spacing: 12) {
-                            ForEach(Theme.all) { t in
-                                Button { themeID = t.id } label: {
-                                    Circle().fill(t.swatchBg)
-                                        .frame(width: 26, height: 26)
-                                        .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
-                                        .overlay(themeID == t.id
-                                            ? Image(systemName: "checkmark")
-                                                .font(.system(size: 8, weight: .bold))
-                                                .foregroundStyle(.white)
-                                            : nil)
-                                        .overlay(Circle().strokeBorder(
-                                            Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
-                                            lineWidth: themeID == t.id ? 2 : 1))
-                                        .animation(Motion.quick, value: themeID)
-                                }
-                                .buttonStyle(.plain)
-                                .help(t.id)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                } header: {
-                    Text("Appearance")
-                } footer: {
-                    Text("Changes apply immediately — there's no Save button.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section {
-                    Button(role: .destructive) {
-                        NSApp.terminate(nil)
-                    } label: {
-                        Label("Quit GitPad", systemImage: "power")
-                    }
-                } footer: {
-                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
+            .background(LeanScrollbar())
         }
         .onAppear { refreshGitInfo() }
         // backgroundSync publishes a fresh .synced(Date) on each cycle → refresh ahead/behind
@@ -824,7 +1199,43 @@ struct ConflictView: View {
                     .padding(6)
             }
             .frame(minHeight: 120)
+            .background(LeanScrollbar())
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+}
+
+/// Every binding, read-only (the global hotkey above it is the one rebindable thing).
+/// A static table on purpose: half of these — Tab indent, Enter list-continue, the slash
+/// menu, click-to-toggle — exist in no menu at all, so nothing to derive from.
+/// Keep in sync with the Note menu, GitPadApp.swift:135-152.
+struct ShortcutsList: View {
+    private static let panel = [
+        ("New note", "⌘N"), ("Library", "⌘L"), ("Command palette", "⌘K"),
+        ("Save & sync", "⌘S"), ("Delete note", "⌘⌫"), ("Minimize to pill", "⌘M"),
+        ("Settings", "⌘,"), ("Quit GitPad", "⌘Q"), ("Back one level / close", "Esc"),
+    ]
+    private static let editing = [
+        ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), ("Cut", "⌘X"),
+        ("Copy", "⌘C"), ("Paste", "⌘V"), ("Select all", "⌘A"),
+    ]
+    private static let behaviors = [
+        ("Indent / outdent list item", "⇥ / ⇧⇥"), ("Continue the list", "↩"),
+        ("Snippet menu", "/"), ("Toggle a checkbox", "Click ☐"),
+        ("Minimize to pill", "Double-click header"),
+    ]
+
+    var body: some View {
+        Group {
+            Section("Panel") { rows(Self.panel) }
+            Section("Editing") { rows(Self.editing) }
+            Section("Editor") { rows(Self.behaviors) }
+        }
+    }
+
+    private func rows(_ items: [(String, String)]) -> some View {
+        ForEach(items, id: \.0) { label, keys in
+            LabeledContent(label) { KeyChip(keys: keys) }
         }
     }
 }
@@ -1003,8 +1414,6 @@ struct LibraryView: View {
                 if searching {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.tertiary)
-                } else {
-                    Text("⌘K").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
@@ -1046,6 +1455,7 @@ struct LibraryView: View {
                 }
                 .padding(.horizontal, 6).padding(.top, 8)
             }
+            .background(LeanScrollbar())
 
             Divider().opacity(0.4)
             if creatingFolder {
@@ -1165,6 +1575,7 @@ struct LibraryView: View {
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
+                .background(LeanScrollbar())
             }
         }
         .frame(maxWidth: .infinity)
@@ -1413,6 +1824,7 @@ struct MarkdownTextView: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.documentView = tv
         scroll.hasVerticalScroller = true
+        scroll.verticalScroller = LeanScroller()
         scroll.drawsBackground = false
         return scroll
     }
@@ -1984,20 +2396,19 @@ struct MarkdownTextView: NSViewRepresentable {
 
 struct ActionBar: View {
     let coordinator: MarkdownTextView.Coordinator
-    var body: some View {
-        HStack(spacing: 12) {
-            action("bold") { coordinator.wrap("**") }
-            action("italic") { coordinator.wrap("*") }
-            action("strikethrough") { coordinator.wrap("~~") }
-            action("chevron.left.forwardslash.chevron.right") { coordinator.wrap("`") }
-            action("checklist") { coordinator.makeTodo() }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-    }
 
-    private func action(_ symbol: String, _ run: @escaping () -> Void) -> some View {
-        Button(action: run) { Image(systemName: symbol).frame(width: 18, height: 16) }
-            .buttonStyle(.borderless)
+    /// ChromeIcon, not bespoke buttons: it already carries the house hover background,
+    /// glyph size/weight and tooltip, so the selection menu matches every other control.
+    var body: some View {
+        HStack(spacing: 2) {
+            ChromeIcon(symbol: "bold", help: "Bold") { coordinator.wrap("**") }
+            ChromeIcon(symbol: "italic", help: "Italic") { coordinator.wrap("*") }
+            ChromeIcon(symbol: "strikethrough", help: "Strikethrough") { coordinator.wrap("~~") }
+            ChromeIcon(symbol: "chevron.left.forwardslash.chevron.right",
+                       help: "Inline code") { coordinator.wrap("`") }
+            ChromeIcon(symbol: "checklist", help: "Checklist") { coordinator.makeTodo() }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
     }
 }
 
