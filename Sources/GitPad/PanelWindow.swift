@@ -30,6 +30,35 @@ final class PanelWindow: NSPanel {
             setContentSize(NSSize(width: 400, height: 560))
             center()
         }
+        // Unplugging a display leaves the panel offscreen, or lets the OS resize a
+        // borderless window it thinks it's restoring. Never removed: the panel lives
+        // for the app lifetime (isReleasedWhenClosed = false).
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screensChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    }
+
+    /// Nudge `r` back inside the current screen's visible area, keeping its size.
+    private func clamped(_ r: NSRect) -> NSRect {
+        guard let v = (screen ?? NSScreen.main)?.visibleFrame else { return r }
+        return NSRect(x: max(v.minX, min(r.minX, v.maxX - r.width)),
+                      y: max(v.minY, min(r.minY, v.maxY - r.height)),
+                      width: r.width, height: r.height)
+    }
+
+    /// Screens changed → put the window back where it belongs. Idempotent and
+    /// unanimated: this is a correction, not a gesture, and it can fire several times
+    /// per plug/unplug. Never routes through `applyPill` — that would cache the
+    /// mangled frame as the expanded one.
+    @objc private func screensChanged() {
+        if let e = expandedFrame { expandedFrame = clamped(e) }
+        if store.pill {
+            // the OS may have resized the pill; re-derive its rect from the current position
+            setFrame(clamped(NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40)),
+                     display: true)
+        } else {
+            setFrame(clamped(frame), display: true)
+        }
     }
 
     override var canBecomeKey: Bool { true }
@@ -59,10 +88,10 @@ final class PanelWindow: NSPanel {
         let radius: CGFloat
         if pill {
             expandedFrame = frame
-            target = NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40)
+            target = clamped(NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40))
             radius = 20 // → height/2
         } else {
-            target = expandedFrame ?? NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560)
+            target = clamped(expandedFrame ?? NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560))
             radius = 14
         }
         // Order the window first: expanding straight into key means typing works the moment
