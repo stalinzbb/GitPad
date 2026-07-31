@@ -3,7 +3,9 @@
 All notable changes to GitPad. Dates are release dates; format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.9.3] — 2026-07-31
+
+Undo you can trust, a selection bar that actually toggles, and ⌘K everywhere.
 
 ### Features
 
