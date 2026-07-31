@@ -7,7 +7,7 @@ final class PanelWindow: NSPanel {
     init(store: NoteStore) {
         self.store = store
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 560),
+            contentRect: NSRect(origin: .zero, size: PanelMetrics.size),
             styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered, defer: false)
         isMovableByWindowBackground = true
@@ -20,14 +20,14 @@ final class PanelWindow: NSPanel {
         hasShadow = true
         let host = NSHostingView(rootView: EditorView(store: store))
         host.wantsLayer = true
-        host.layer?.cornerRadius = 14
+        host.layer?.cornerRadius = Radius.panel
         host.layer?.cornerCurve = .continuous
         host.layer?.masksToBounds = true
         contentView = host
         setFrameAutosaveName("GitPad.panel")
         // first launch, or a saved pill-sized frame → restore a sane full size
         if frame.width < 300 {
-            setContentSize(NSSize(width: 400, height: 560))
+            setContentSize(PanelMetrics.size)
             center()
         }
         // Unplugging a display leaves the panel offscreen, or lets the OS resize a
@@ -54,8 +54,7 @@ final class PanelWindow: NSPanel {
         if let e = expandedFrame { expandedFrame = clamped(e) }
         if store.pill {
             // the OS may have resized the pill; re-derive its rect from the current position
-            setFrame(clamped(NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40)),
-                     display: true)
+            setFrame(clamped(pillRect()), display: true)
         } else {
             setFrame(clamped(frame), display: true)
         }
@@ -69,7 +68,7 @@ final class PanelWindow: NSPanel {
     /// dragging. Events only reach here when no control took them, so the chrome
     /// glyphs keep their own clicks.
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2, !store.pill, event.locationInWindow.y > frame.height - 42 {
+        if event.clickCount == 2, !store.pill, event.locationInWindow.y > frame.height - PanelMetrics.headerHeight {
             store.setPill?(true)
             return
         }
@@ -81,6 +80,13 @@ final class PanelWindow: NSPanel {
 
     private var expandedFrame: NSRect?
 
+    /// The pill, hung from the current window's top edge and horizontally centred on it.
+    private func pillRect() -> NSRect {
+        NSRect(x: frame.midX - PanelMetrics.pillSize.width / 2,
+               y: frame.maxY - PanelMetrics.pillSize.height,
+               width: PanelMetrics.pillSize.width, height: PanelMetrics.pillSize.height)
+    }
+
     /// Collapse to a 240×40 lozenge (saving the expanded frame) or restore it.
     func applyPill(_ pill: Bool) {
         isMovableByWindowBackground = !pill // pill drags via its own gesture (double-tap = expand)
@@ -88,11 +94,14 @@ final class PanelWindow: NSPanel {
         let radius: CGFloat
         if pill {
             expandedFrame = frame
-            target = clamped(NSRect(x: frame.midX - 120, y: frame.maxY - 40, width: 240, height: 40))
-            radius = 20 // → height/2
+            target = clamped(pillRect())
+            radius = Radius.pill // → height/2
         } else {
-            target = clamped(expandedFrame ?? NSRect(x: frame.midX - 200, y: frame.midY - 280, width: 400, height: 560))
-            radius = 14
+            target = clamped(expandedFrame ?? NSRect(x: frame.midX - PanelMetrics.size.width / 2,
+                                                     y: frame.midY - PanelMetrics.size.height / 2,
+                                                     width: PanelMetrics.size.width,
+                                                     height: PanelMetrics.size.height))
+            radius = Radius.panel
         }
         // Order the window first: expanding straight into key means typing works the moment
         // the animation starts, and key state never flips mid-flight.
@@ -106,8 +115,8 @@ final class PanelWindow: NSPanel {
         NSAnimationContext.runAnimationGroup { ctx in
             // snappy: strong ease-out (fast start = responsive), not the mushy built-in
             // easeInEaseOut. The pill toggles often, so it must feel instant.
-            ctx.duration = 0.22
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+            ctx.duration = Motion.pillDuration
+            ctx.timingFunction = Motion.pillCA
             // One CA transaction drives the window AND its content. Previously the full UI was
             // jammed into the 240×40 frame instantly and NSHostingView re-solved layout every
             // frame while animator() grew the window — that re-wrap was the jitter. Laying out

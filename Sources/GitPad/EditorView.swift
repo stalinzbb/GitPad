@@ -35,8 +35,8 @@ struct EditorView: View {
         .animation(Motion.quick, value: store.paletteOpen)
         .tint(theme.accentSwift) // buttons/toggles/sliders/selection take the theme accent
         .overlay( // hairline edge; material below dims itself when the window loses key
-            RoundedRectangle(cornerRadius: store.pill ? 20 : 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: store.pill ? Radius.pill : Radius.panel, style: .continuous)
+                .strokeBorder(Color.primary.opacity(Alpha.strokeFaint), lineWidth: 1)
                 // match applyPill's curve, or the hairline snaps to its new radius while
                 // the window is still growing
                 .animation(Motion.pillFrame, value: store.pill)
@@ -1553,7 +1553,7 @@ struct MarkdownTextView: NSViewRepresentable {
         tv.isRichText = false
         tv.allowsUndo = true
         tv.font = Coordinator.baseFont(fontSize, design)
-        tv.textContainerInset = NSSize(width: 20, height: 14) // room to breathe, like a real notes app
+        tv.textContainerInset = EditorMetrics.inset // room to breathe, like a real notes app
         tv.defaultParagraphStyle = Coordinator.paragraphStyle
         tv.drawsBackground = false
         tv.isVerticallyResizable = true
@@ -1625,8 +1625,8 @@ struct MarkdownTextView: NSViewRepresentable {
         /// only via `defaultParagraphStyle` would be wiped on the first keystroke.
         static let paragraphStyle: NSParagraphStyle = {
             let p = NSMutableParagraphStyle()
-            p.lineHeightMultiple = 1.25
-            p.paragraphSpacing = 6
+            p.lineHeightMultiple = EditorMetrics.lineHeightMultiple
+            p.paragraphSpacing = EditorMetrics.paragraphSpacing
             return p
         }()
 
@@ -1777,17 +1777,20 @@ struct MarkdownTextView: NSViewRepresentable {
             func headingStyle(_ before: CGFloat, _ hFont: NSFont) -> NSParagraphStyle {
                 let p = Self.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
                 p.paragraphSpacingBefore = before
-                p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: hFont) * 1.25).rounded()
+                p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: hFont)
+                    * EditorMetrics.lineHeightMultiple).rounded()
                 return p
             }
             // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
-            let h1 = Self.bold(Self.baseFont(fontSize + 8, design))
-            let h2 = Self.bold(Self.baseFont(fontSize + 4, design))
-            let h3 = Self.bold(Self.baseFont(fontSize + 2, design))
+            let (o1, o2, o3) = EditorMetrics.headingOffsets
+            let (b1, b2, b3) = EditorMetrics.headingSpaceBefore
+            let h1 = Self.bold(Self.baseFont(fontSize + o1, design))
+            let h2 = Self.bold(Self.baseFont(fontSize + o2, design))
+            let h3 = Self.bold(Self.baseFont(fontSize + o3, design))
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
-                (re(#"^# .*$"#), [.font: h1, .paragraphStyle: headingStyle(14, h1)]),
-                (re(#"^## .*$"#), [.font: h2, .paragraphStyle: headingStyle(10, h2)]),
-                (re(#"^### .*$"#), [.font: h3, .paragraphStyle: headingStyle(8, h3)]),
+                (re(#"^# .*$"#), [.font: h1, .paragraphStyle: headingStyle(b1, h1)]),
+                (re(#"^## .*$"#), [.font: h2, .paragraphStyle: headingStyle(b2, h2)]),
+                (re(#"^### .*$"#), [.font: h3, .paragraphStyle: headingStyle(b3, h3)]),
                 // hide the hash marks entirely so headers read as rendered titles
                 // (no lookahead: a bare "# " collapses immediately, so the line never
                 // jumps left when the first title character lands)
@@ -1796,7 +1799,8 @@ struct MarkdownTextView: NSViewRepresentable {
                 (re(#"\*\*[^*\n]+\*\*"#), [.font: Self.bold(f)]),
                 (re(#"(?<!\*)\*[^*\n]+\*(?!\*)"#), [.obliqueness: 0.15]),
                 (re(#"~~[^~\n]+~~"#), [.strikethroughStyle: NSUnderlineStyle.single.rawValue]),
-                (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular),
+                (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(
+                                        ofSize: fontSize + EditorMetrics.codeSizeDelta, weight: .regular),
                                      .foregroundColor: theme.code]),
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
                 (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
@@ -1844,7 +1848,7 @@ struct MarkdownTextView: NSViewRepresentable {
         private func applyListLayout(_ storage: NSTextStorage, in range: NSRange) {
             let ns = storage.string as NSString
             let font = Self.baseFont(fontSize, design)
-            let unit = (fontSize * 1.5).rounded() // extra indent per nest level
+            let unit = (fontSize * EditorMetrics.indentUnitFactor).rounded() // extra indent per nest level
             ns.enumerateSubstrings(in: range, options: [.byParagraphs]) { sub, subR, _, _ in
                 guard let line = sub, let m = ListLogic.match(line) else { return }
                 let lineNS = line as NSString
@@ -1870,8 +1874,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 let style: NSParagraphStyle
                 if let s = self.listStyleCache[key] { style = s } else {
                     let p = NSMutableParagraphStyle()
-                    p.lineHeightMultiple = 1.25
-                    p.paragraphSpacing = 2 // tighter inside lists; same for bullets and numbers
+                    p.lineHeightMultiple = EditorMetrics.lineHeightMultiple
+                    // tighter inside lists; same for bullets and numbers
+                    p.paragraphSpacing = EditorMetrics.listParagraphSpacing
                     p.firstLineHeadIndent = CGFloat(depth) * unit
                     p.headIndent = p.firstLineHeadIndent + width // wrap under the content
                     self.listStyleCache[key] = p
@@ -1910,9 +1915,10 @@ struct MarkdownTextView: NSViewRepresentable {
             let ns = tv.string as NSString
             let caret = min(tv.selectedRange().location, ns.length)
             let line = ns.substring(with: ns.lineRange(for: NSRange(location: caret, length: 0)))
-            if line.hasPrefix("# ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 8, design)) }
-            else if line.hasPrefix("## ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 4, design)) }
-            else if line.hasPrefix("### ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 2, design)) }
+            let (o1, o2, o3) = EditorMetrics.headingOffsets
+            if line.hasPrefix("# ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + o1, design)) }
+            else if line.hasPrefix("## ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + o2, design)) }
+            else if line.hasPrefix("### ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + o3, design)) }
             tv.typingAttributes = attrs
         }
 
