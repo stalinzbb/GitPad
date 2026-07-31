@@ -278,6 +278,34 @@ if CommandLine.arguments.contains("--selftest") {
     precondition(sv.verticalScroller is LeanScroller)
     precondition(sv.verticalScroller!.frame.width > 0, "\(sv.verticalScroller!.frame)")
 
+    // Updater: version compare is numeric per component — a string compare gets 10 vs 9 wrong
+    precondition(Updater.isNewer("0.9.10", than: "0.9.9"))
+    precondition(Updater.isNewer("1.0", than: "0.9.3"))     // short version, missing parts = 0
+    precondition(!Updater.isNewer("0.9.3", than: "0.9.3"))  // same → nothing to offer
+    precondition(!Updater.isNewer("0.9.2", than: "0.9.3"))  // older → never downgrade
+    // feed parsing: skip drafts, strip the tag's "v", match the un-prefixed asset name,
+    // strip the digest's "sha256:" — every one of those mismatches is a silent failure
+    let feed = Data("""
+    [{"tag_name":"v1.5.0","draft":true,"html_url":"https://e/d","assets":[]},
+     {"tag_name":"v0.9.9","draft":false,"html_url":"https://e/0.9.9",
+      "assets":[{"name":"GitPad-0.9.9.dmg","browser_download_url":"https://e/d.dmg","digest":"sha256:dd"},
+                {"name":"GitPad-0.9.9.zip","browser_download_url":"https://e/GitPad-0.9.9.zip","digest":"sha256:ab"}]}]
+    """.utf8)
+    let rel = Updater.parse(feed, "0.9.3")
+    precondition(rel?.version == "0.9.9", "draft skipped, v stripped: \(String(describing: rel))")
+    precondition(rel?.sha256 == "ab", "picked the zip's digest, not the dmg's")
+    precondition(rel?.zipURL?.lastPathComponent == "GitPad-0.9.9.zip")
+    precondition(rel?.pageURL.absoluteString == "https://e/0.9.9")
+    precondition(Updater.parse(feed, "0.9.9") == nil) // already running it
+    precondition(Updater.parse(feed, "1.2.0") == nil) // running something newer
+    // a release whose asset hasn't uploaded yet still surfaces — the page link is the fallback
+    let noAsset = Data(#"[{"tag_name":"v0.9.9","draft":false,"html_url":"https://e/n","assets":[]}]"#.utf8)
+    precondition(Updater.parse(noAsset, "0.9.3")?.zipURL == nil)
+    precondition(Updater.parse(noAsset, "0.9.3")?.version == "0.9.9")
+    // garbage and no-network must both be silent, never a nag
+    precondition(Updater.parse(Data("not json".utf8), "0.9.3") == nil)
+    precondition(Updater.parse(nil, "0.9.3") == nil)
+
     print("selftest OK")
     exit(0)
 }

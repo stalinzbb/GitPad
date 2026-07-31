@@ -103,7 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var openItem: NSMenuItem!
     var revealItem: NSMenuItem!         // anchor for inserting the dynamic recent-notes section
     var recentItems: [NSMenuItem] = []  // dynamically rebuilt on each menu open
+    var updateItem: NSMenuItem!         // hidden until a check finds a newer release
+    var updateSeparator: NSMenuItem!
     var syncTimer: Timer?
+    var updateTimer: Timer?
     private var lastSyncKick = Date.distantPast
     private var pillDragOrigin: NSRect?
     private var pillDragMouse: NSPoint?
@@ -160,6 +163,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = statusImage(alert: false)
         let menu = NSMenu()
+        // Added first so they sit at index 0/1, above everything. Both stay hidden until
+        // menuNeedsUpdate sees a release — an empty slot beats shuffling indices later.
+        updateItem = menu.addItem(withTitle: "Update Available…", action: #selector(updateAction), keyEquivalent: "")
+        updateItem.isHidden = true
+        updateSeparator = .separator()
+        updateSeparator.isHidden = true
+        menu.addItem(updateSeparator)
         openItem = menu.addItem(withTitle: "Open  (\(Hotkey.display))", action: #selector(togglePanel), keyEquivalent: "")
         menu.addItem(withTitle: "Append Clipboard to Daily", action: #selector(appendClipboard), keyEquivalent: "")
         menu.addItem(withTitle: "Sync Now", action: #selector(syncNow), keyEquivalent: "")
@@ -204,9 +214,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.panel.appearance = name.flatMap { NSAppearance(named: $0) }
         }
         syncTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.backgroundSync() }
+        // 6h tick, but checkForUpdates throttles to ~once a day — the timer only exists so
+        // a Mac that stays awake for a week still notices a release.
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 21_600, repeats: true) { [weak self] _ in
+            self?.checkForUpdates()
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
         backgroundSync()
+        checkForUpdates()
 
         // show the panel on first launch so opening the app isn't a no-op
         panel.makeKeyAndOrderFront(nil)
@@ -240,6 +256,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         openItem.title = "Open  (\(Hotkey.display))" // reflect a rebound hotkey
+        // Deliberately not the orange statusImage(alert:) badge — that's the sync-failure
+        // cue, and an available update is good news, not a problem to fix.
+        if case .available(let r) = store.update {
+            updateItem.title = "Update to \(r.version)…"
+            updateItem.isHidden = false
+            updateSeparator.isHidden = false
+        }
         // rebuild the "Recent" section directly above "Reveal Notes in Finder"
         recentItems.forEach(menu.removeItem)
         recentItems.removeAll()
@@ -377,5 +400,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showGitSetup() {
         store.screen = .gitSetup
         showPanel()
+    }
+
+    // MARK: updates
+
+    /// Release check. Silent by design: a failure leaves `store.update` untouched, so a
+    /// flaky network never nags and never clears a release we already found.
+    /// `force` (the Settings button) skips the throttle; nothing skips the opt-out.
+    func checkForUpdates(force: Bool = false) {
+        guard Updater.currentVersion != nil else { return } // `swift run`: no bundle, no version
+        let d = UserDefaults.standard
+        if !force {
+            guard d.object(forKey: "autoCheckUpdates") as? Bool ?? true else { return }
+            let last = d.object(forKey: "lastUpdateCheck") as? Date ?? .distantPast
+            guard Date().timeIntervalSince(last) > 72_000 else { return } // ~20h: once a day
+        }
+        Updater.check { [weak self] release, _ in
+            d.set(Date(), forKey: "lastUpdateCheck")
+            if let release { self?.store.update = .available(release) }
+        }
+    }
+
+    @objc func updateAction() {
+        guard case .available(let r) = store.update else { return }
+        NSWorkspace.shared.open(r.pageURL)
     }
 }

@@ -105,6 +105,9 @@ final class NoteStore: ObservableObject {
     var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
     @Published var syncing = false
+    /// Set by the AppDelegate's release check and by the Settings button. Drives the
+    /// status-menu item and the Settings row; never pops anything over the editor.
+    @Published var update: Updater.State = .none
     private var loading = false
     private var saveWork: DispatchWorkItem?
     private var titleCache: [URL: (title: String, mtime: Date)] = [:]

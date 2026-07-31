@@ -3,6 +3,16 @@
 All notable changes to GitPad. Dates are release dates; format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Features
+
+- **Check for updates.** GitPad now notices when a newer version is published: a
+  "Update to X.Y.Z…" item appears at the top of the menu-bar menu, and Settings →
+  General → Updates shows the running version, a manual Check button, and an
+  opt-out. The check is an unauthenticated `GET` of the public releases list about
+  once a day, sends nothing about you, and can be turned off entirely. (#40)
+
 ## [0.9.3] — 2026-07-31
 
 Undo you can trust, a selection bar that actually toggles, and ⌘K everywhere.
