@@ -243,6 +243,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// the exit; harmless, the next launch syncs immediately.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         store.flushPendingSave()
+        // Gated on the toggle, not merely on a stage existing: switching "Install updates
+        // automatically" off has to stop the automatic install too, or the switch lies.
+        // The staged bundle stays put, and "Restart to Update" still offers it explicitly.
+        if UserDefaults.standard.bool(forKey: "autoUpdate") { Updater.installStagedQuietly() }
         return .terminateNow
     }
 
@@ -445,7 +449,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         Updater.check { [weak self] release, _ in
             d.set(Date(), forKey: "lastUpdateCheck")
-            if let release { self?.store.update = .available(release) }
+            guard let self, let release else { return }
+            // Already fetched this exact release in an earlier session — don't pay for it
+            // twice, just re-offer the restart.
+            if Updater.stagedVersionOnDisk == release.version {
+                store.update = .ready(release.version)
+                return
+            }
+            store.update = .available(release)
+            guard d.bool(forKey: "autoUpdate") else { return }
+            Updater.stage(release) { [weak self] s in
+                // Staging failure stays silent: .available is still on screen and the
+                // manual Update button still works. Nothing is worth a nag here.
+                if case .failed = s { return }
+                self?.store.update = s
+            }
         }
     }
 
@@ -453,6 +471,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch store.update {
         case .available(let r):
             Updater.install(r) { [weak self] in self?.store.update = $0 }
+        case .ready:
+            Updater.installStagedNow { [weak self] in self?.store.update = $0 }
         case .failed:
             NSWorkspace.shared.open(Updater.releasesPage)
         default:

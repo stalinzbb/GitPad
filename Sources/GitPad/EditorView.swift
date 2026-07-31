@@ -842,6 +842,7 @@ struct SettingsView: View {
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates = true
+    @AppStorage("autoUpdate") private var autoUpdate = false
     @State private var remote = ""
     @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
@@ -914,12 +915,20 @@ struct SettingsView: View {
                     // The opt-out is what keeps SECURITY.md's "no network calls except your
                     // git remote" honest — off means the app never contacts github.com.
                     Toggle("Check automatically", isOn: $autoCheckUpdates)
+                    if autoCheckUpdates {
+                        Toggle("Install updates automatically", isOn: $autoUpdate)
+                    }
                     updateRow
                 } header: {
                     Text("Updates")
                 } footer: {
-                    Text("Checks github.com/stalinzbb/GitPad about once a day. Nothing is sent except the request.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Checks github.com/stalinzbb/GitPad about once a day. Nothing is sent except the request.")
+                        if autoCheckUpdates && autoUpdate {
+                            Text("Downloads and verifies in the background, then installs when you quit — or right away with Restart to Update. Never while you're writing.")
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     Button(role: .destructive) {
@@ -1066,7 +1075,11 @@ struct SettingsView: View {
             } label: {
                 Text(why).font(.caption).foregroundStyle(.secondary)
             }
-        case .none, .ready: // .ready only exists once staging lands
+        case .ready(let v):
+            LabeledContent("Version \(v) is ready") {
+                Button("Restart to Update") { Updater.installStagedNow { store.update = $0 } }
+            }
+        case .none:
             LabeledContent {
                 Button(checkingUpdate ? "Checking…" : "Check for Updates") { checkForUpdates() }
                     .disabled(checkingUpdate)

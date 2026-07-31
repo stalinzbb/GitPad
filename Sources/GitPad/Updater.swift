@@ -162,11 +162,12 @@ enum Updater {
     /// Single-flight. Read and written on main only.
     private static var installing = false
 
-    /// Download → verify → swap → relaunch.
-    ///
-    /// Nothing on disk is touched until the downloaded bundle has passed *every* check,
-    /// so any failure leaves the running app exactly as it was.
-    static func install(_ r: Release, state: @escaping (State) -> Void) {
+    /// Shared front half of both install paths: refuse early, download, hash, verify.
+    /// Calls `done` on main with a verified bundle sitting in the scratch dir; on any
+    /// failure it reports `.failed` and `done` never runs.
+    private static func fetchVerified(_ r: Release,
+                                      state: @escaping (State) -> Void,
+                                      done: @escaping (URL) -> Void) {
         guard !installing else { return }
         if let refusal = refusalReason() { state(.failed(refusal)); return }
         guard let zip = r.zipURL, let expected = r.sha256 else {
@@ -189,19 +190,26 @@ enum Updater {
             DispatchQueue.main.async { state(.busy("Verifying…")) }
             DispatchQueue.global().async {
                 switch unpack(zipFile, expecting: expected) {
-                case .failed(let why):
-                    fail(why)
-                case .ok(let newApp):
-                    DispatchQueue.main.async {
-                        state(.busy("Installing…"))
-                        if let why = swap(Bundle.main.bundleURL, with: newApp) { fail(why); return }
-                        try? FileManager.default.removeItem(at: scratch)
-                        installing = false
-                        relaunch()
-                    }
+                case .failed(let why): fail(why)
+                case .ok(let app): DispatchQueue.main.async { done(app) }
                 }
             }
         }.resume()
+    }
+
+    /// Download → verify → swap → relaunch, right now.
+    ///
+    /// Nothing on disk is touched until the downloaded bundle has passed *every* check,
+    /// so any failure leaves the running app exactly as it was.
+    static func install(_ r: Release, state: @escaping (State) -> Void) {
+        fetchVerified(r, state: state) { app in
+            state(.busy("Installing…"))
+            let why = swap(Bundle.main.bundleURL, with: app)
+            try? FileManager.default.removeItem(at: scratch)
+            installing = false
+            if let why { state(.failed(why)); return }
+            relaunch()
+        }
     }
 
     /// Reasons to refuse before touching the network. nil means go ahead.
@@ -307,6 +315,92 @@ enum Updater {
         }
         try? fm.removeItem(at: aside) // best effort; a leftover .old-<pid> is harmless
         return nil
+    }
+
+    // MARK: - Staging (auto-update)
+
+    /// Application Support, never Caches: a purgeable cache can be evicted between
+    /// staging and quitting, and a half-present bundle is worse than no stage at all.
+    static let stageDir: URL = FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("GitPad/Update", isDirectory: true)
+
+    private static var stagedApp: URL { stageDir.appendingPathComponent("GitPad.app") }
+
+    /// Cheap peek at what's already staged, so a daily check doesn't re-download a
+    /// release it fetched yesterday. Deliberately unverified — `verifiedStagedApp()`
+    /// does that at the moment of use, which is the only moment it means anything.
+    static var stagedVersionOnDisk: String? {
+        Bundle(url: stagedApp)?.infoDictionary?["CFBundleShortVersionString"] as? String
+    }
+
+    /// Download and verify now, install later. Never swaps, never relaunches, never
+    /// interrupts — the whole point of auto-update is that you don't notice it.
+    static func stage(_ r: Release, state: @escaping (State) -> Void) {
+        fetchVerified(r, state: state) { app in
+            let fm = FileManager.default
+            try? fm.removeItem(at: stageDir) // a newer release supersedes whatever was staged
+            let ok = (try? fm.createDirectory(at: stageDir, withIntermediateDirectories: true)) != nil
+                && (try? fm.moveItem(at: app, to: stagedApp)) != nil
+            try? fm.removeItem(at: scratch)
+            installing = false
+            guard ok else {
+                try? fm.removeItem(at: stageDir)
+                state(.failed("Couldn't stage the update"))
+                return
+            }
+            state(.ready(r.version))
+        }
+    }
+
+    /// The staged bundle, re-verified from scratch. The stage dir is user-writable, so
+    /// anything could have replaced that bundle since we put it there — this is the
+    /// TOCTOU check, and it re-runs the full chain rather than trusting an earlier pass.
+    ///
+    /// It also refuses to go backwards. Download verification is deliberately
+    /// version-agnostic (it checks provenance, not claims), but *installing* a stage
+    /// older than what's running would be a silent downgrade — reachable if the app was
+    /// updated by hand while a stage sat on disk. Anything suspect is discarded, not kept.
+    ///
+    /// Blocking: ~0.4s of codesign + spctl. Fine in the quit hook, off-main elsewhere.
+    static func verifiedStagedApp() -> URL? {
+        let app = stagedApp
+        guard FileManager.default.fileExists(atPath: app.path) else { return nil }
+        guard let staged = Bundle(url: app)?.infoDictionary?["CFBundleShortVersionString"] as? String,
+              let current = currentVersion, isNewer(staged, than: current),
+              verify(app)
+        else {
+            try? FileManager.default.removeItem(at: stageDir)
+            return nil
+        }
+        return app
+    }
+
+    /// Install the staged bundle at quit. Synchronous and quick (re-verify + two renames).
+    /// Any failure discards the stage and lets the quit proceed on the old version: a
+    /// delayed update is never worth blocking a quit, let alone failing one.
+    static func installStagedQuietly() {
+        guard let app = verifiedStagedApp() else { return }
+        _ = swap(Bundle.main.bundleURL, with: app)
+        try? FileManager.default.removeItem(at: stageDir)
+    }
+
+    /// "Restart to Update": the same swap, on request, without waiting for a quit.
+    static func installStagedNow(state: @escaping (State) -> Void) {
+        state(.busy("Installing…"))
+        DispatchQueue.global().async {
+            guard let app = verifiedStagedApp() else {
+                DispatchQueue.main.async {
+                    state(.failed("The staged update no longer verifies — it was discarded"))
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                if let why = swap(Bundle.main.bundleURL, with: app) { state(.failed(why)); return }
+                try? FileManager.default.removeItem(at: stageDir)
+                relaunch()
+            }
+        }
     }
 
     /// Launch the freshly-swapped bundle, then quit. No helper process and no shell:

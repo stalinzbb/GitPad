@@ -18,6 +18,12 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
   build, and refuses after downloading unless the bytes match GitHub's published
   SHA-256 *and* the bundle is Developer-ID-signed by us *and* Apple notarized it.
   Any failure leaves the running app untouched. (#45)
+- **Optional auto-update**, off by default. With it on, a new release is downloaded
+  and verified in the background and installed when you next quit — or immediately
+  with "Restart to Update". Nothing ever pops up over the editor, and nothing
+  installs while you're writing. The staged bundle is verified again at the instant
+  it's installed, not just when it was downloaded, and is discarded rather than
+  installed if anything about it stopped adding up.
 
 ### Bug fixes
 
