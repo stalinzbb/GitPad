@@ -24,8 +24,13 @@ struct NoteMeta {
 }
 
 final class NoteStore: ObservableObject {
-    let dir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Documents/GitPad")
+    /// `GITPAD_DIR` points a build at a throwaway notes folder — a dev build run from the
+    /// worktree shares this app's bundle id, notes dir and defaults with an installed copy,
+    /// so without it every test edit lands in the real notes and syncs to the real remote.
+    /// Same escape-hatch shape as `GITPAD_DEVICE_NAME` in GitSync.
+    let dir = ProcessInfo.processInfo.environment["GITPAD_DIR"].map { URL(fileURLWithPath: $0) }
+        ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/GitPad")
 
     @Published var notes: [URL] = []
     @Published var folders: [String] = []
@@ -66,8 +71,12 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// ⌘K: Library with the search field focused. The counter is the signal — it also
-    /// re-focuses when the Library is already open (where `onAppear` won't fire again).
+    /// ⌘K: the command palette overlay (see `CommandPalette`). Rendered above every screen.
+    @Published var paletteOpen = false
+
+    /// Library with the search field focused — the palette's "Search Library" command.
+    /// The counter is the signal, so it also re-focuses when the Library is already open
+    /// (where `onAppear` won't fire again).
     @Published var searchRequest = 0
     func searchNotes() {
         screen = .library
