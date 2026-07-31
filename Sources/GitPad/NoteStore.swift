@@ -24,8 +24,13 @@ struct NoteMeta {
 }
 
 final class NoteStore: ObservableObject {
-    let dir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Documents/GitPad")
+    /// `GITPAD_DIR` points a build at a throwaway notes folder — a dev build run from the
+    /// worktree shares this app's bundle id, notes dir and defaults with an installed copy,
+    /// so without it every test edit lands in the real notes and syncs to the real remote.
+    /// Same escape-hatch shape as `GITPAD_DEVICE_NAME` in GitSync.
+    let dir = ProcessInfo.processInfo.environment["GITPAD_DIR"].map { URL(fileURLWithPath: $0) }
+        ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/GitPad")
 
     @Published var notes: [URL] = []
     @Published var folders: [String] = []
