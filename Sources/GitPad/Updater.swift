@@ -287,7 +287,18 @@ enum Updater {
             .status == 0 else { return false }
         guard GitSync.exec("/usr/sbin/spctl", ["--assess", "--type", "execute", app.path])
             .status == 0 else { return false }
-        return Bundle(url: app)?.bundleIdentifier == "com.stalinzbb.gitpad"
+        return infoValue(app, "CFBundleIdentifier") == "com.stalinzbb.gitpad"
+    }
+
+    /// Read a key straight out of a bundle's Info.plist.
+    ///
+    /// NOT `Bundle(url:)`: Foundation caches those per path, and staging always writes to
+    /// the *same* path — so a re-stage inside one process can hand back the previous
+    /// bundle's Info.plist. Every use here is a security or downgrade check, and all of
+    /// them want what is on disk right now.
+    private static func infoValue(_ app: URL, _ key: String) -> String? {
+        let plist = app.appendingPathComponent("Contents/Info.plist")
+        return (NSDictionary(contentsOf: plist) as? [String: Any])?[key] as? String
     }
 
     private static func fileSHA256(_ file: URL) -> String? {
@@ -331,7 +342,7 @@ enum Updater {
     /// release it fetched yesterday. Deliberately unverified — `verifiedStagedApp()`
     /// does that at the moment of use, which is the only moment it means anything.
     static var stagedVersionOnDisk: String? {
-        Bundle(url: stagedApp)?.infoDictionary?["CFBundleShortVersionString"] as? String
+        infoValue(stagedApp, "CFBundleShortVersionString")
     }
 
     /// Download and verify now, install later. Never swaps, never relaunches, never
@@ -366,7 +377,7 @@ enum Updater {
     static func verifiedStagedApp() -> URL? {
         let app = stagedApp
         guard FileManager.default.fileExists(atPath: app.path) else { return nil }
-        guard let staged = Bundle(url: app)?.infoDictionary?["CFBundleShortVersionString"] as? String,
+        guard let staged = infoValue(app, "CFBundleShortVersionString"),
               let current = currentVersion, isNewer(staged, than: current),
               verify(app)
         else {
