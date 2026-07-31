@@ -2,104 +2,6 @@ import SwiftUI
 import AppKit
 import Carbon.HIToolbox // kVK_Escape for the hotkey recorder
 
-// MARK: - Themes (token set consumed by the editor + chrome)
-//
-// Curated presets, not a base×color matrix (see GROWTH-style decision: real palettes
-// like Nord/Dracula are defined for ONE mode; the matrix would invent ugly combos and
-// double the tokens). Adding a theme is one row below — appearance/swatch/SwiftUI color
-// all derive from `base` + hex, so you only pick the 3 colors that actually differ.
-
-enum ThemeBase {
-    case system, light, dark
-    var appearance: NSAppearance.Name? {
-        switch self { case .system: return nil; case .light: return .aqua; case .dark: return .darkAqua }
-    }
-}
-
-struct Theme: Identifiable {
-    let id: String
-    let appearance: NSAppearance.Name?  // nil = follow system; drives every native control
-    let accent: NSColor                 // checkboxes, chips (and, wrapped, the SwiftUI tint)
-    let code: NSColor                   // inline code
-    private let tintHex: UInt?          // opaque panel surface. nil = System (follow the OS)
-
-    var accentSwift: Color { Color(nsColor: accent) }
-    /// The panel's own background. Text sits on THIS, never on the desktop — which is what
-    /// keeps the window readable over a white backdrop. System follows the OS window color,
-    /// so it adapts light/dark instead of having no surface at all.
-    var surface: Color { tintHex.map { Color(hex: $0) } ?? Color(nsColor: .windowBackgroundColor) }
-    var swatchBg: Color { surface }
-
-    /// The common case: a preset from hex colors + a light/dark base.
-    init(id: String, base: ThemeBase, accent: UInt, code: UInt, tint: UInt) {
-        self.id = id; self.appearance = base.appearance
-        self.accent = NSColor(hex: accent); self.code = NSColor(hex: code); self.tintHex = tint
-    }
-    /// System: dynamic accent that follows the OS, no tint wash.
-    private init(system id: String) {
-        self.id = id; self.appearance = nil
-        self.accent = .controlAccentColor; self.code = .systemPurple; self.tintHex = nil
-    }
-
-    static let all: [Theme] = [
-        Theme(system: "System"),
-        Theme(id: "Sepia",            base: .light, accent: 0xA87538, code: 0x996B33, tint: 0xF5E8CF),
-        Theme(id: "Nord",             base: .dark,  accent: 0x87BFD1, code: 0xA3BF8C, tint: 0x2E3340),
-        Theme(id: "Dracula",          base: .dark,  accent: 0xBD94FA, code: 0x4FE67A, tint: 0x292936),
-        Theme(id: "Solarized Light",  base: .light, accent: 0x268CD1, code: 0x859900, tint: 0xFCF5E3),
-    ]
-
-    static func named(_ id: String) -> Theme { all.first { $0.id == id } ?? all[0] }
-}
-
-extension Color {
-    init(hex: UInt) {
-        self.init(.sRGB, red: Double((hex >> 16) & 0xFF) / 255,
-                  green: Double((hex >> 8) & 0xFF) / 255, blue: Double(hex & 0xFF) / 255)
-    }
-}
-
-extension NSColor {
-    convenience init(hex: UInt) {
-        self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-                  green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
-    }
-}
-
-/// Central motion tokens. `reduce` is read at interaction time (no observer), and a
-/// nil animation means "instant" — so Reduce Motion falls out for free everywhere.
-enum Motion {
-    static var reduce: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    // screen: critically-damped reposition; quick: snappy hover; pop: momentum bounce.
-    static var screen: Animation? { reduce ? nil : .spring(response: 0.32, dampingFraction: 0.85) }
-    static var quick:  Animation? { reduce ? nil : .spring(response: 0.18, dampingFraction: 0.9) }
-    static var pop:    Animation? { reduce ? nil : .spring(response: 0.30, dampingFraction: 0.7) }
-    /// Mirrors `PanelWindow.applyPill`'s CA curve so SwiftUI chrome tracks the window frame.
-    static var pillFrame: Animation? {
-        reduce ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.22)
-    }
-}
-
-/// Contrast floor for the floating panel. The window blends `.behindWindow`, so without
-/// a real surface the text renders against whatever is on screen — unreadable over white,
-/// because `labelColor` follows the window's *appearance*, not the actual backdrop.
-/// One tunable: how much of the material shows through.
-enum PanelSurface {
-    static var reduceTransparency: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-    }
-    static var opacity: Double { reduceTransparency ? 1.0 : 0.92 }
-}
-
-/// Ambient sync-state color, shared by every NavBar dot + the pill.
-func syncColor(_ status: SyncStatus) -> Color {
-    switch status {
-    case .synced: return .green
-    case .offline: return .orange
-    default: return .secondary.opacity(0.4)
-    }
-}
-
 // MARK: - Root switcher
 
 struct EditorView: View {
@@ -197,49 +99,6 @@ struct NavBar<L: View, C: View, R: View>: View {
     }
 }
 
-/// Every chrome control is this: one identical square container, one glyph size/weight,
-/// one hover background. Alignment then comes from the container geometry rather than
-/// from each SF Symbol's own optical center — which is why mixing a heavy glyph
-/// (square.and.pencil) with a thin one (xmark) used to read as misaligned.
-/// Pair it with symmetric glyphs; see `ChromeGlyph`.
-struct ChromeIcon: View {
-    let symbol: String
-    let help: String
-    var tint: Color? = nil // only the conflict badge deviates from the secondary chrome
-    let action: () -> Void
-    @State private var hovering = false
-
-    static let side: CGFloat = 28 // container; 2pt gaps → ~30pt pitch
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .symbolRenderingMode(.monochrome)
-                .frame(width: Self.side, height: Self.side)
-                .background(hovering ? Color.primary.opacity(0.08) : .clear,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(tint ?? Color.secondary)
-        .onHover { hovering = $0 }
-        .animation(Motion.quick, value: hovering)
-        .help(help)
-    }
-}
-
-/// The chrome glyph set — symmetric, matched optical weight, so the clusters balance.
-enum ChromeGlyph {
-    static let back     = "chevron.left"
-    static let library  = "square.grid.2x2"
-    static let newNote  = "plus"          // was square.and.pencil (heavy, juts top-right)
-    static let settings = "gearshape"
-    static let minimize = "minus"         // was a busy 4-arrow glyph
-    static let close    = "xmark"
-    static let conflict = "exclamationmark.triangle.fill"
-}
-
 /// "Note deleted — Undo", bottom-anchored, self-dismissing. The delete already went to
 /// the Trash; this just makes the slip one click to reverse instead of a Finder trip.
 struct UndoDeleteBanner: View {
@@ -278,32 +137,6 @@ struct PaletteCommand {
     let symbol: String
     var keys: String = ""
     let run: () -> Void
-}
-
-/// A key combo you can actually read: the same chip the hotkey recorder uses, so the
-/// palette, the shortcuts table and Settings all render a binding identically.
-struct KeyChip: View {
-    let keys: String
-
-    var body: some View {
-        Text(keys)
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color.primary.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-    }
-}
-
-/// Section label, matching the Library's group headers.
-struct SectionLabel: View {
-    let text: String
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            .tracking(0.6)
-    }
 }
 
 /// ⌘K: one field over every command plus note search, floating above whatever screen
@@ -479,7 +312,7 @@ struct CommandPalette: View {
             Text(label(item)).font(.callout).lineLimit(1)
             Spacer(minLength: 8)
             if case .cmd(let c) = item, !commands[c].keys.isEmpty {
-                KeyChip(keys: commands[c].keys)
+                Chip(text: commands[c].keys)
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -646,94 +479,6 @@ struct PillView: View {
         )
         .help("Double-click to expand (\(Hotkey.display))")
     }
-}
-
-/// A 5pt capsule knob and no track line. Drawing is the ONLY thing overridden — an
-/// earlier version also narrowed the scroller to 9pt, which pushed the knob into the
-/// panel's rounded mask (it read as cut off at the ends) and fought the overlay
-/// scroller's expand animation. Standard geometry costs nothing: overlay scrollers
-/// float above the content, so the gutter takes no layout width either way.
-final class LeanScroller: NSScroller {
-    override class var isCompatibleWithOverlayScrollers: Bool { true }
-
-    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {} // no track line
-
-    override func drawKnob() {
-        guard bounds.height >= bounds.width else { return super.drawKnob() } // vertical only
-        let knob = rect(for: .knob)
-        let width: CGFloat = 5
-        // centred in the scroller, so it clears the window's corner radius at both ends
-        let r = NSRect(x: bounds.midX - width / 2, y: knob.minY + 2,
-                       width: width, height: knob.height - 4)
-        guard r.height > 0 else { return }
-        NSColor.secondaryLabelColor.withAlphaComponent(0.55).setFill()
-        NSBezierPath(roundedRect: r, xRadius: width / 2, yRadius: width / 2).fill()
-    }
-}
-
-/// Give a SwiftUI ScrollView/List/Form the same lean scroller: `.background(LeanScrollbar())`
-/// on the scrolling container.
-///
-/// The work happens in `viewDidMoveToWindow`, NOT `updateNSView` — SwiftUI never calls
-/// update on a `.background()` representable, so an update-based version is dead code.
-/// SwiftUI also wraps the helper in its own host view, so the scroll view is never a
-/// sibling: climb ancestors until one of them contains it. Nothing private; a miss just
-/// leaves the stock scroller in place.
-struct LeanScrollbar: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { Swapper(frame: .zero) }
-    func updateNSView(_ v: NSView, context: Context) {}
-
-    final class Swapper: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard window != nil else { return }
-            // async: the sibling scroll view isn't built yet on the first pass
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                // placed inside the scrolling content → exact hit, no searching
-                if let sv = self.enclosingScrollView {
-                    Swapper.install(in: sv)
-                    return
-                }
-                guard let start = self.superview else { return }
-                var node: NSView? = start
-                for _ in 0..<6 { // bounded, so we can't wander into an unrelated screen
-                    guard let n = node else { return }
-                    if let sv = Swapper.firstScrollView(in: n) {
-                        Swapper.install(in: sv)
-                        return
-                    }
-                    node = n.superview
-                }
-            }
-        }
-
-        static func install(in sv: NSScrollView) {
-            guard !(sv.verticalScroller is LeanScroller) else { return }
-            sv.verticalScroller = LeanScroller()
-            sv.tile() // else the swapped-in scroller lays out 0pt wide
-        }
-
-        static func firstScrollView(in view: NSView) -> NSScrollView? {
-            if let sv = view as? NSScrollView { return sv }
-            for sub in view.subviews {
-                if let hit = firstScrollView(in: sub) { return hit }
-            }
-            return nil
-        }
-    }
-}
-
-/// Refined translucent material; automatically softens when the window is inactive.
-struct GlassBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let v = NSVisualEffectView()
-        v.material = .popover
-        v.blendingMode = .behindWindow
-        v.state = .followsWindowActiveState
-        return v
-    }
-    func updateNSView(_ v: NSView, context: Context) {}
 }
 
 // MARK: - Capture (just the editor)
@@ -1235,7 +980,7 @@ struct ShortcutsList: View {
 
     private func rows(_ items: [(String, String)]) -> some View {
         ForEach(items, id: \.0) { label, keys in
-            LabeledContent(label) { KeyChip(keys: keys) }
+            LabeledContent(label) { Chip(text: keys) }
         }
     }
 }
