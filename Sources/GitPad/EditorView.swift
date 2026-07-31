@@ -2043,7 +2043,7 @@ struct ActionBar: View {
     @AppStorage("theme") private var themeID = "System"
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) { // hover targets nearly touch → the bar reads as one toolbar
             icon("bold", "Bold — **text**") { coordinator.wrap("**") }
             icon("italic", "Italic — *text*") { coordinator.wrap("*") }
             icon("strikethrough", "Strikethrough — ~~text~~") { coordinator.wrap("~~") }
@@ -2065,20 +2065,37 @@ struct ActionBar: View {
     private var rule: some View { Divider().frame(height: 14) }
 
     private func icon(_ symbol: String, _ help: String, _ run: @escaping () -> Void) -> some View {
-        action(help, run) { Image(systemName: symbol) }
+        ActionBarButton(help: help, action: run) { Image(systemName: symbol) }
     }
 
     private func heading(_ level: Int) -> some View {
-        action("Heading \(level)", { coordinator.setHeading(level) }) {
+        ActionBarButton(help: "Heading \(level)", action: { coordinator.setHeading(level) }) {
             Text("H\(level)").font(.caption.weight(.semibold))
         }
     }
+}
 
-    private func action<L: View>(_ help: String, _ run: @escaping () -> Void,
-                                 @ViewBuilder _ label: () -> L) -> some View {
-        Button(action: run) { label().frame(width: 18, height: 16) }
-            .buttonStyle(.borderless)
-            .help(help)
+/// `ChromeIcon`'s hover affordance — a rounded wash behind the glyph — at the popover's
+/// tighter rhythm, and generic over the label so H1/H2 can be text where the rest are
+/// symbols. `.borderless` keeps the label on the theme accent the bar sets.
+private struct ActionBarButton<Label: View>: View {
+    let help: String
+    let action: () -> Void
+    @ViewBuilder let label: Label
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            label
+                .frame(width: 22, height: 20)
+                .background(hovering ? Color.primary.opacity(0.08) : .clear,
+                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
+        .help(help)
     }
 }
 
