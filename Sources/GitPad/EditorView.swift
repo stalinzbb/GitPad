@@ -124,8 +124,13 @@ struct EditorView: View {
                 UndoDeleteBanner(store: store)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if !store.pill, store.paletteOpen, store.screen != .onboarding {
+                CommandPalette(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
         }
         .animation(Motion.quick, value: store.lastDeleted?.original)
+        .animation(Motion.quick, value: store.paletteOpen)
         .tint(theme.accentSwift) // buttons/toggles/sliders/selection take the theme accent
         .overlay( // hairline edge; material below dims itself when the window loses key
             RoundedRectangle(cornerRadius: store.pill ? 20 : 14, style: .continuous)
@@ -260,6 +265,189 @@ struct UndoDeleteBanner: View {
         .task(id: store.lastDeleted?.original) { // restarts the timer for each new delete
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             store.lastDeleted = nil
+        }
+    }
+}
+
+/// One palette entry. A static array, not menu-derived: half these commands
+/// (Sync Now, Set Up Sync, Reveal in Finder) live in the status menu or no menu at all.
+struct PaletteCommand {
+    let title: String
+    let symbol: String
+    var keys: String = ""
+    let run: () -> Void
+}
+
+/// ⌘K: one field over every command plus note search, floating above whatever screen
+/// is showing. Enter runs the highlighted row; Esc (or the scrim) closes.
+struct CommandPalette: View {
+    @ObservedObject var store: NoteStore
+    @State private var query = ""
+    @State private var index = 0
+    @State private var monitor: Any?
+    @FocusState private var focused: Bool
+
+    /// Commands index into `commands`; notes carry their URL.
+    private enum Item {
+        case cmd(Int)
+        case note(URL)
+    }
+
+    private var commands: [PaletteCommand] {
+        var c: [PaletteCommand] = [
+            PaletteCommand(title: "New Note", symbol: ChromeGlyph.newNote, keys: "⌘N") { store.newNote() },
+            PaletteCommand(title: "Open Daily Note", symbol: "calendar") { store.open(store.dailyNote()) },
+            PaletteCommand(title: "Library", symbol: ChromeGlyph.library, keys: "⌘L") { store.screen = .library },
+            PaletteCommand(title: "Search Library", symbol: "magnifyingglass") { store.searchNotes() },
+            PaletteCommand(title: "Save & Sync", symbol: "square.and.arrow.down", keys: "⌘S") { store.saveNow() },
+            PaletteCommand(title: "Delete Note", symbol: "trash", keys: "⌘⌫") { store.deleteCurrent() },
+        ]
+        if store.lastDeleted != nil {
+            c.append(PaletteCommand(title: "Undo Delete", symbol: "arrow.uturn.backward") { store.undoDelete() })
+        }
+        c += [
+            PaletteCommand(title: "Minimize to Pill", symbol: ChromeGlyph.minimize, keys: "⌘M") { store.setPill?(true) },
+            PaletteCommand(title: "Settings", symbol: ChromeGlyph.settings, keys: "⌘,") { store.openSettings() },
+            PaletteCommand(title: "Set Up Sync", symbol: "arrow.triangle.branch") { store.screen = .gitSetup },
+            PaletteCommand(title: "Sync Now", symbol: "arrow.clockwise") { store.requestSync?() },
+            PaletteCommand(title: "Append Clipboard to Daily", symbol: "doc.on.clipboard") {
+                guard let clip = NSPasteboard.general.string(forType: .string),
+                      !clip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                store.open(store.dailyNote())
+                store.appendToDaily(clip)
+            },
+            PaletteCommand(title: "Reveal Notes in Finder", symbol: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([store.dir])
+            },
+        ]
+        return c
+    }
+
+    /// Commands first, then notes. Notes reuse the Library's own ranking verbatim.
+    private var items: [Item] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let cmds: [Int]
+        if q.isEmpty {
+            cmds = Array(commands.indices)
+        } else {
+            let tokens = NoteStore.fold(q).split(whereSeparator: \.isWhitespace).map(String.init)
+            let all = commands
+            cmds = all.indices.filter { i in
+                let t = NoteStore.fold(all[i].title)
+                return tokens.allSatisfy { t.contains($0) }
+            }
+        }
+        let notes = q.isEmpty ? Array(store.notes.prefix(5)) : Array(store.matches(q).prefix(8))
+        return cmds.map(Item.cmd) + notes.map(Item.note)
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.25)
+                .onTapGesture { store.paletteOpen = false }
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "command").foregroundStyle(.secondary)
+                    TextField("Run a command or find a note…", text: $query)
+                        .textFieldStyle(.plain)
+                        .focused($focused)
+                        .onSubmit(runSelected)
+                        .onExitCommand { store.paletteOpen = false } // beats PanelWindow.cancelOperation
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                Divider().opacity(0.4)
+                list
+            }
+            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .padding(.horizontal, 12).padding(.top, 44)
+        }
+        .onAppear {
+            focused = true
+            // The focused text field's field editor swallows ↑/↓, so `.onMoveCommand`
+            // never fires. Same local-monitor trick as HotkeyRecorder, scoped to the
+            // palette's lifetime — everything else passes straight through.
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                switch Int(event.keyCode) {
+                case kVK_UpArrow: move(-1); return nil
+                case kVK_DownArrow: move(1); return nil
+                default: return event
+                }
+            }
+        }
+        .onDisappear {
+            if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        }
+        .onChange(of: query) { _ in index = 0 }
+    }
+
+    private var list: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                let rows = items
+                LazyVStack(spacing: 1) {
+                    ForEach(rows.indices, id: \.self) { i in row(rows[i], i) }
+                }
+                .padding(6)
+            }
+            .frame(maxHeight: 380)
+            .onChange(of: index) { proxy.scrollTo($0, anchor: .center) }
+        }
+    }
+
+    private func row(_ item: Item, _ i: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol(item))
+                .font(.system(size: 12))
+                .frame(width: 16)
+                .foregroundStyle(.secondary)
+            Text(label(item)).font(.callout).lineLimit(1)
+            Spacer(minLength: 0)
+            if case .cmd(let c) = item {
+                Text(commands[c].keys).font(.caption.monospaced()).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(i == index ? Color.accentColor.opacity(0.18) : .clear,
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { run(item) }
+        .id(i)
+    }
+
+    private func label(_ item: Item) -> String {
+        switch item {
+        case .cmd(let i): return commands[i].title
+        case .note(let url): return store.title(for: url)
+        }
+    }
+
+    private func symbol(_ item: Item) -> String {
+        switch item {
+        case .cmd(let i): return commands[i].symbol
+        case .note: return "doc.text"
+        }
+    }
+
+    private func move(_ delta: Int) {
+        let count = items.count
+        guard count > 0 else { return }
+        index = min(max(0, index + delta), count - 1)
+    }
+
+    private func runSelected() {
+        let rows = items
+        guard rows.indices.contains(index) else { return }
+        run(rows[index])
+    }
+
+    private func run(_ item: Item) {
+        store.paletteOpen = false
+        switch item {
+        case .cmd(let i): commands[i].run()
+        case .note(let url): store.open(url)
         }
     }
 }
@@ -453,6 +641,14 @@ struct SettingsView: View {
     @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
 
+    /// Local state, deliberately NOT new `Screen` cases: those would multiply the
+    /// `goBack()` / settingsReturn branches for nothing. Esc and ⌘, keep working as-is;
+    /// the tab just resets to General after a Setup-guide round trip.
+    enum Tab: String, CaseIterable {
+        case general = "General", appearance = "Appearance", shortcuts = "Shortcuts", sync = "Sync"
+    }
+    @State private var tab: Tab = .general
+
     // (tag, label) — system designs plus Apple-bundled note-friendly fonts.
     // Nothing here ships with the app, so open-sourcing stays clean.
     static let fonts: [(String, String)] = [
@@ -474,7 +670,16 @@ struct SettingsView: View {
                 ChromeIcon(symbol: ChromeGlyph.back, help: "Back (Esc)") { store.goBack() }
             }
 
+            Picker("Section", selection: $tab) {
+                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12).padding(.bottom, 4)
+
             Form {
+                switch tab {
+                case .general:
                 Section("Editor") {
                     Picker("Font", selection: $fontDesign) {
                         ForEach(Self.fonts, id: \.0) { tag, label in
@@ -497,9 +702,54 @@ struct SettingsView: View {
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
                 }
+                Section {
+                    Button(role: .destructive) {
+                        NSApp.terminate(nil)
+                    } label: {
+                        Label("Quit GitPad", systemImage: "power")
+                    }
+                } footer: {
+                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                case .appearance:
+                Section {
+                    LabeledContent("Theme") {
+                        HStack(spacing: 12) {
+                            ForEach(Theme.all) { t in
+                                Button { themeID = t.id } label: {
+                                    Circle().fill(t.swatchBg)
+                                        .frame(width: 26, height: 26)
+                                        .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
+                                        .overlay(themeID == t.id
+                                            ? Image(systemName: "checkmark")
+                                                .font(.system(size: 8, weight: .bold))
+                                                .foregroundStyle(.white)
+                                            : nil)
+                                        .overlay(Circle().strokeBorder(
+                                            Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
+                                            lineWidth: themeID == t.id ? 2 : 1))
+                                        .animation(Motion.quick, value: themeID)
+                                }
+                                .buttonStyle(.plain)
+                                .help(t.id)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } footer: {
+                    Text("Changes apply immediately — there's no Save button.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                case .shortcuts:
                 Section("Global Hotkey") {
                     HotkeyRecorder()
                 }
+                ShortcutsList()
+
+                case .sync:
                 Section {
                     HStack {
                         TextField("git@github.com:you/notes.git", text: $remote)
@@ -550,45 +800,6 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Section {
-                    LabeledContent("Theme") {
-                        HStack(spacing: 12) {
-                            ForEach(Theme.all) { t in
-                                Button { themeID = t.id } label: {
-                                    Circle().fill(t.swatchBg)
-                                        .frame(width: 26, height: 26)
-                                        .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
-                                        .overlay(themeID == t.id
-                                            ? Image(systemName: "checkmark")
-                                                .font(.system(size: 8, weight: .bold))
-                                                .foregroundStyle(.white)
-                                            : nil)
-                                        .overlay(Circle().strokeBorder(
-                                            Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
-                                            lineWidth: themeID == t.id ? 2 : 1))
-                                        .animation(Motion.quick, value: themeID)
-                                }
-                                .buttonStyle(.plain)
-                                .help(t.id)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                } header: {
-                    Text("Appearance")
-                } footer: {
-                    Text("Changes apply immediately — there's no Save button.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section {
-                    Button(role: .destructive) {
-                        NSApp.terminate(nil)
-                    } label: {
-                        Label("Quit GitPad", systemImage: "power")
-                    }
-                } footer: {
-                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -788,6 +999,43 @@ struct ConflictView: View {
     }
 }
 
+/// Every binding, read-only (the global hotkey above it is the one rebindable thing).
+/// A static table on purpose: half of these — Tab indent, Enter list-continue, the slash
+/// menu, click-to-toggle — exist in no menu at all, so nothing to derive from.
+/// Keep in sync with the Note menu, GitPadApp.swift:135-152.
+struct ShortcutsList: View {
+    private static let panel = [
+        ("New note", "⌘N"), ("Library", "⌘L"), ("Command palette", "⌘K"),
+        ("Save & sync", "⌘S"), ("Delete note", "⌘⌫"), ("Minimize to pill", "⌘M"),
+        ("Settings", "⌘,"), ("Quit GitPad", "⌘Q"), ("Back one level / close", "Esc"),
+    ]
+    private static let editing = [
+        ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), ("Cut", "⌘X"),
+        ("Copy", "⌘C"), ("Paste", "⌘V"), ("Select all", "⌘A"),
+    ]
+    private static let behaviors = [
+        ("Indent / outdent list item", "⇥ / ⇧⇥"), ("Continue the list", "↩"),
+        ("Snippet menu", "/"), ("Toggle a checkbox", "Click ☐"),
+        ("Minimize to pill", "Double-click header"),
+    ]
+
+    var body: some View {
+        Group {
+            Section("Panel") { rows(Self.panel) }
+            Section("Editing") { rows(Self.editing) }
+            Section("Editor") { rows(Self.behaviors) }
+        }
+    }
+
+    private func rows(_ items: [(String, String)]) -> some View {
+        ForEach(items, id: \.0) { label, keys in
+            LabeledContent(label) {
+                Text(keys).font(.callout.monospaced()).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 /// Records a new global hotkey: click to arm, then press a modified key combo.
 /// A local key-down monitor captures (and consumes) the first press; Esc cancels.
 struct HotkeyRecorder: View {
@@ -962,8 +1210,6 @@ struct LibraryView: View {
                 if searching {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.tertiary)
-                } else {
-                    Text("⌘K").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
