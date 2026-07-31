@@ -2355,20 +2355,19 @@ struct MarkdownTextView: NSViewRepresentable {
 
 struct ActionBar: View {
     let coordinator: MarkdownTextView.Coordinator
-    var body: some View {
-        HStack(spacing: 12) {
-            action("bold") { coordinator.wrap("**") }
-            action("italic") { coordinator.wrap("*") }
-            action("strikethrough") { coordinator.wrap("~~") }
-            action("chevron.left.forwardslash.chevron.right") { coordinator.wrap("`") }
-            action("checklist") { coordinator.makeTodo() }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-    }
 
-    private func action(_ symbol: String, _ run: @escaping () -> Void) -> some View {
-        Button(action: run) { Image(systemName: symbol).frame(width: 18, height: 16) }
-            .buttonStyle(.borderless)
+    /// ChromeIcon, not bespoke buttons: it already carries the house hover background,
+    /// glyph size/weight and tooltip, so the selection menu matches every other control.
+    var body: some View {
+        HStack(spacing: 2) {
+            ChromeIcon(symbol: "bold", help: "Bold") { coordinator.wrap("**") }
+            ChromeIcon(symbol: "italic", help: "Italic") { coordinator.wrap("*") }
+            ChromeIcon(symbol: "strikethrough", help: "Strikethrough") { coordinator.wrap("~~") }
+            ChromeIcon(symbol: "chevron.left.forwardslash.chevron.right",
+                       help: "Inline code") { coordinator.wrap("`") }
+            ChromeIcon(symbol: "checklist", help: "Checklist") { coordinator.makeTodo() }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
     }
 }
 
