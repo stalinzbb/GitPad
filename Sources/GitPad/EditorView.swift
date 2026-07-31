@@ -1776,6 +1776,10 @@ struct MarkdownTextView: NSViewRepresentable {
         tv.isAutomaticDashSubstitutionEnabled = false // keep "---" as typed → divider
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
+        // Highlight only — no .foregroundColor. AppKit's default recolors selected glyphs,
+        // which un-hides the `.clear` backing markers ("2." showing under the drawn "b.").
+        // Keeping stored colors is also what Notes/Xcode do.
+        tv.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         tv.delegate = context.coordinator
         storage.delegate = context.coordinator
         context.coordinator.textView = tv
@@ -1801,6 +1805,10 @@ struct MarkdownTextView: NSViewRepresentable {
         }
         if tv.string != text {
             tv.string = text
+            // Wholesale replacement — every queued undo action points at ranges in the
+            // document that just went away. Only fires on external changes (typing keeps the
+            // binding equal via textDidChange), so nothing undoable is lost.
+            tv.undoManager?.removeAllActions()
             if text == "# " { // fresh note: caret after the title marker, keyboard ready to type
                 tv.setSelectedRange(NSRange(location: 2, length: 0))
                 DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
@@ -1873,10 +1881,17 @@ struct MarkdownTextView: NSViewRepresentable {
             let loc = min(editedRange.location, storage.length)
             let safe = NSRange(location: loc, length: min(editedRange.length, storage.length - loc))
             let para = (storage.string as NSString).paragraphRange(for: safe)
+            // Must be read HERE: isUndoing is only true while undo executes, and by the time
+            // the async block runs it's false again — so the deferred renumber would register
+            // a *new* top-level undo group (redo stack cleared, next ⌘Z undoes the renumber).
+            // highlight() below still runs: attribute-only, registers nothing, and undone text
+            // needs restyling.
+            let um = self.textView?.undoManager
+            let isUndoRedo = (um?.isUndoing ?? false) || (um?.isRedoing ?? false)
             DispatchQueue.main.async { [weak self, weak storage] in
                 guard let self, let storage else { return }
                 var range = para
-                if let tv = self.textView, !self.isRenumbering, !tv.hasMarkedText() {
+                if let tv = self.textView, !isUndoRedo, !self.isRenumbering, !tv.hasMarkedText() {
                     self.isRenumbering = true
                     self.renumberListBlock(tv, around: para.location)
                     self.isRenumbering = false
@@ -2159,7 +2174,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 return true
             }
 
-            tv.undoManager?.beginUndoGrouping()
+            // No explicit undo group: groupsByEvent already opened one for this Tab press, so
+            // nesting here pushed an empty group whenever every replaceText skipped — and an
+            // empty group silently swallows one ⌘Z.
             var edits: [(Int, Int)] = [] // (line start, char delta)
             for start in starts.sorted(by: >) { // back-to-front keeps earlier offsets valid
                 if !out {
@@ -2173,7 +2190,6 @@ struct MarkdownTextView: NSViewRepresentable {
                     if n > 0, replaceText(tv, NSRange(location: start, length: n), "") { edits.append((start, -n)) }
                 }
             }
-            tv.undoManager?.endUndoGrouping()
 
             var mapped = sel // map the original selection through the edits
             for (loc, d) in edits {
