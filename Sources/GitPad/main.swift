@@ -165,6 +165,17 @@ if CommandLine.arguments.contains("--selftest") {
     precondition(ListLogic.letterLabel(27) == "aa")
     precondition(ListLogic.romanLabel(4) == "iv" && ListLogic.romanLabel(9) == "ix")
     precondition(ListLogic.displayMarker(number: nil, depth: 1) == "◦")
+
+    // lean scrollbar: 9pt gutter, and AppKit keeps our scroller when it installs one
+    precondition(LeanScroller.scrollerWidth(for: .regular, scrollerStyle: .overlay) == 9)
+    let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+    sv.hasVerticalScroller = true
+    sv.verticalScroller = LeanScroller()
+    sv.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 400))
+    sv.tile()
+    precondition(sv.verticalScroller is LeanScroller)
+    precondition(sv.verticalScroller!.frame.width == 9, "\(sv.verticalScroller!.frame)")
+
     print("selftest OK")
     exit(0)
 }

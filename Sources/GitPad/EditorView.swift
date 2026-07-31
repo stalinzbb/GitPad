@@ -393,6 +393,7 @@ struct CommandPalette: View {
                 .padding(6)
             }
             .frame(maxHeight: 380)
+            .background(LeanScrollbar())
             .onChange(of: index) { proxy.scrollTo($0, anchor: .center) }
         }
     }
@@ -558,6 +559,51 @@ struct PillView: View {
                 }
         )
         .help("Double-click to expand (\(Hotkey.display))")
+    }
+}
+
+/// A 9pt-wide scroller with no slot line and a 4pt capsule knob. AppKit's stock knob is
+/// 7pt inside a 17pt gutter and paints a track the moment it expands — too much furniture
+/// for a 400pt panel. Width is the only layout-affecting override, so legacy (always-shown)
+/// scrollers get the same slim treatment instead of being forced to overlay behind the
+/// user's back.
+final class LeanScroller: NSScroller {
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
+    override class func scrollerWidth(for controlSize: NSControl.ControlSize,
+                                      scrollerStyle: NSScroller.Style) -> CGFloat { 9 }
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {} // no track line
+
+    override func drawKnob() {
+        let r = rect(for: .knob).insetBy(dx: 2.5, dy: 2)
+        guard r.width > 0, r.height > 0 else { return }
+        NSColor.secondaryLabelColor.withAlphaComponent(0.55).setFill()
+        NSBezierPath(roundedRect: r, xRadius: r.width / 2, yRadius: r.width / 2).fill()
+    }
+}
+
+/// Give a SwiftUI ScrollView/List/Form the same lean scroller: `.background(LeanScrollbar())`
+/// on the scrolling container. The helper view lands as a sibling of the NSScrollView SwiftUI
+/// made, so it looks there — nothing private, and a miss just leaves the stock scroller.
+struct LeanScrollbar: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+
+    func updateNSView(_ v: NSView, context: Context) {
+        // async: on the first pass the view isn't in the hierarchy yet
+        DispatchQueue.main.async {
+            guard let container = v.superview else { return }
+            Self.apply(in: container)
+        }
+    }
+
+    /// First scroll view on each branch wins — don't reach into a nested one.
+    private static func apply(in view: NSView) {
+        if let sv = view as? NSScrollView {
+            if !(sv.verticalScroller is LeanScroller) { sv.verticalScroller = LeanScroller() }
+            return
+        }
+        view.subviews.forEach(apply)
     }
 }
 
@@ -804,6 +850,7 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
+            .background(LeanScrollbar())
         }
         .onAppear { refreshGitInfo() }
         // backgroundSync publishes a fresh .synced(Date) on each cycle → refresh ahead/behind
@@ -994,6 +1041,7 @@ struct ConflictView: View {
                     .padding(6)
             }
             .frame(minHeight: 120)
+            .background(LeanScrollbar())
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
         }
     }
@@ -1251,6 +1299,7 @@ struct LibraryView: View {
                 }
                 .padding(.horizontal, 6).padding(.top, 8)
             }
+            .background(LeanScrollbar())
 
             Divider().opacity(0.4)
             if creatingFolder {
@@ -1370,6 +1419,7 @@ struct LibraryView: View {
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
+                .background(LeanScrollbar())
             }
         }
         .frame(maxWidth: .infinity)
@@ -1618,6 +1668,7 @@ struct MarkdownTextView: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.documentView = tv
         scroll.hasVerticalScroller = true
+        scroll.verticalScroller = LeanScroller()
         scroll.drawsBackground = false
         return scroll
     }
