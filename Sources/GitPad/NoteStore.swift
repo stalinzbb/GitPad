@@ -24,12 +24,27 @@ struct NoteMeta {
 }
 
 final class NoteStore: ObservableObject {
-    let dir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Documents/GitPad")
+    /// `GITPAD_DIR` points a build at a throwaway notes folder — a dev build run from the
+    /// worktree shares this app's bundle id, notes dir and defaults with an installed copy,
+    /// so without it every test edit lands in the real notes and syncs to the real remote.
+    /// Same escape-hatch shape as `GITPAD_DEVICE_NAME` in GitSync.
+    let dir = ProcessInfo.processInfo.environment["GITPAD_DIR"].map { URL(fileURLWithPath: $0) }
+        ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/GitPad")
 
     @Published var notes: [URL] = []
     @Published var folders: [String] = []
-    @Published var selected: URL? { didSet { loadSelected() } }
+    @Published var selected: URL? {
+        willSet {
+            // Switching notes with an edit still in the 1s debounce would drop it: the work
+            // item fires later and writes the new note's text over the old note's URL —
+            // or gets cancelled by the reload. Flush first, while `selected`/`text` still
+            // refer to the outgoing note. Same-path reassignment is a deliberate reload
+            // (see resolveKeep) and must not flush.
+            if newValue?.path != selected?.path, saveWork != nil { saveNow() }
+        }
+        didSet { loadSelected() }
+    }
     @Published var text = "" {
         didSet { if !loading { scheduleSave() } }
     }
@@ -296,6 +311,14 @@ final class NoteStore: ObservableObject {
     func open(_ url: URL) {
         selected = url
         screen = .capture
+    }
+
+    /// Select today's note, but never re-select it if it's already open: reassigning
+    /// `selected` re-reads from disk, which throws away whatever is in the editor buffer
+    /// (⌥Space lands here, and it fires far more often than the note actually changes).
+    func selectDaily() {
+        let daily = dailyNote()
+        if selected?.path != daily.path { selected = daily }
     }
 
     /// Append text to today's note — used by the clipboard menu item and
@@ -567,6 +590,8 @@ final class NoteStore: ObservableObject {
     }
 
     func saveNow() {
+        saveWork?.cancel() // any pending debounce is now redundant (no-op if this IS it)
+        saveWork = nil
         guard let url = selected else { return }
         try? Self.toMarkdown(text).write(to: url, atomically: true, encoding: .utf8)
         uncache(url) // body changed → search/snippet re-read next time

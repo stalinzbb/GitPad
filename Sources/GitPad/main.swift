@@ -21,6 +21,17 @@ if CommandLine.arguments.contains("--uitest") {
         return (tv, coord)
     }
     func spin() { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) } // flush deferred renumber
+    // NSTextView takes its undo manager from its window, so undo tests need one. Borderless
+    // and never ordered in — nothing appears on screen.
+    var undoWindows: [NSWindow] = [] // keep alive; a released window drops the undo manager
+    func makeUndoableEditor(_ text: String) -> (SmartTextView, MarkdownTextView.Coordinator) {
+        let (tv, coord) = makeEditor(text)
+        let w = NSWindow(contentRect: tv.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        w.contentView?.addSubview(tv)
+        w.makeFirstResponder(tv)
+        undoWindows.append(w)
+        return (tv, coord)
+    }
 
     // Tab on a caret at end of a list line: line indents, caret stays at its text position
     var (tv, coord) = makeEditor("- one\n- two\n")
@@ -125,6 +136,96 @@ if CommandLine.arguments.contains("--uitest") {
     tv.insertText("", replacementRange: tv.selectedRange())
     spin()
     precondition(tv.string == "1. a\n2. c\n", tv.string)
+
+    // Selection bar: wrap() is a toggle, through both detection paths
+    (tv, coord) = makeEditor("hello world\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 5))
+    coord.wrap("**")
+    precondition(tv.string == "**hello** world\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 2, length: 5), "\(tv.selectedRange())")
+    coord.wrap("**") // marks around the selection → strip
+    precondition(tv.string == "hello world\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 0, length: 5), "\(tv.selectedRange())")
+    tv.setSelectedRange(NSRange(location: 0, length: 5))
+    coord.wrap("**")
+    tv.setSelectedRange(NSRange(location: 0, length: 9)) // "**hello**" — marks inside
+    coord.wrap("**")
+    precondition(tv.string == "hello world\n", tv.string)
+
+    // setHeading: set, clear, and re-level
+    (tv, coord) = makeEditor("a line\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 0))
+    coord.setHeading(2)
+    precondition(tv.string == "## a line\n", tv.string)
+    coord.setHeading(2)
+    precondition(tv.string == "a line\n", tv.string)
+    (tv, coord) = makeEditor("# Title\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 0))
+    coord.setHeading(2)
+    precondition(tv.string == "## Title\n", tv.string)
+
+    // makeList converts across families, toggles off, and lets renumber fix ordinals
+    (tv, coord) = makeEditor("☐ a\nplain\n☑ c\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 13))
+    coord.makeList("- ")
+    precondition(tv.string == "- a\n- plain\n- c\n", tv.string)
+    coord.makeList("- ") // all one family now → strip
+    precondition(tv.string == "a\nplain\nc\n", tv.string)
+    coord.makeList("1. ")
+    spin()
+    precondition(tv.string == "1. a\n2. plain\n3. c\n", tv.string)
+    // nesting survives the conversion (indent must not be duplicated)
+    (tv, coord) = makeEditor("  - x\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 5))
+    coord.makeList("☐ ")
+    precondition(tv.string == "  ☐ x\n", tv.string)
+
+    // converting to to-dos must not uncheck an existing ☑
+    (tv, coord) = makeEditor("☑ done\nplain\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 12))
+    coord.makeTodo()
+    precondition(tv.string == "☑ done\n☐ plain\n", tv.string)
+
+    // insertLink with nothing usable on the clipboard: empty parens, caret between them
+    NSPasteboard.general.clearContents()
+    (tv, coord) = makeEditor("docs\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 4))
+    coord.insertLink()
+    precondition(tv.string == "[docs]()\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 7, length: 0), "\(tv.selectedRange())")
+
+    // Undo across a renumbering edit must converge on the original and keep redo alive.
+    // The deferred renumber is its own top-level group (the event group has closed by the
+    // time it runs), so an Enter mid-list is two presses — but each ⌘Z must make progress.
+    // Before the fix it ping-ponged: undo ran the renumber again, which registered a *new*
+    // group and wiped the redo stack, so the list never came back.
+    (tv, coord) = makeUndoableEditor("1. a\n2. b\n3. c\n")
+    tv.setSelectedRange(NSRange(location: 9, length: 0)) // end of "2. b"
+    precondition(coord.textView(tv, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+    spin()
+    precondition(tv.string == "1. a\n2. b\n3. \n4. c\n", tv.string)
+    tv.undoManager?.undo() // the renumber
+    spin()
+    precondition(tv.string == "1. a\n2. b\n3. \n3. c\n", "undo #1 didn't revert the renumber: \(tv.string)")
+    tv.undoManager?.undo() // the Enter
+    spin()
+    precondition(tv.string == "1. a\n2. b\n3. c\n", "undo #2 didn't restore the original: \(tv.string)")
+    precondition(tv.undoManager?.canRedo == true, "redo stack cleared — the renumber re-registered")
+    tv.undoManager?.redo(); spin()
+    tv.undoManager?.redo(); spin()
+    precondition(tv.string == "1. a\n2. b\n3. \n4. c\n", "redo didn't replay: \(tv.string)")
+
+    // A no-op Shift-Tab must not eat the previous undo. indentList used to open its own undo
+    // group around edits that all skipped, pushing an empty group that swallowed one ⌘Z.
+    (tv, coord) = makeUndoableEditor("- one\n")
+    tv.setSelectedRange(NSRange(location: 5, length: 0))
+    tv.insertText(" two", replacementRange: tv.selectedRange())
+    spin()
+    precondition(coord.textView(tv, doCommandBy: #selector(NSResponder.insertBacktab(_:)))) // no indent to strip
+    precondition(tv.string == "- one two\n", tv.string)
+    tv.undoManager?.undo()
+    spin()
+    precondition(tv.string == "- one\n", "empty undo group swallowed the edit: \(tv.string)")
 
     print("uitest OK")
     exit(0)
