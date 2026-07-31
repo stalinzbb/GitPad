@@ -431,13 +431,7 @@ struct CommandPalette: View {
                 let rows = items
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(rows.indices, id: \.self) { i in
-                        // header whenever the group changes — cheaper than a nested
-                        // structure, and it keeps `index` addressing selectable rows only
-                        if i == 0 || group(rows[i]) != group(rows[i - 1]) {
-                            SectionLabel(text: group(rows[i]))
-                                .padding(.horizontal, 8)
-                                .padding(.top, i == 0 ? 2 : 9).padding(.bottom, 3)
-                        }
+                        separator(before: i, in: rows)
                         row(rows[i], i)
                     }
                 }
@@ -446,6 +440,24 @@ struct CommandPalette: View {
             .frame(maxHeight: 380)
             .background(LeanScrollbar())
             .onChange(of: index) { proxy.scrollTo($0, anchor: .center) }
+        }
+    }
+
+    /// What goes above a row when its group changes: a hairline between command groups
+    /// (they're self-evident — labelling four of them just adds furniture), and a real
+    /// header for the notes, which do need saying. Emitted inline so `index` keeps
+    /// addressing selectable rows only.
+    @ViewBuilder private func separator(before i: Int, in rows: [Item]) -> some View {
+        let isNote: Bool = { if case .note = rows[i] { return true }; return false }()
+        if i == 0 || group(rows[i]) != group(rows[i - 1]) {
+            if isNote {
+                SectionLabel(text: group(rows[i]))
+                    .padding(.horizontal, 8)
+                    .padding(.top, i == 0 ? 2 : 9).padding(.bottom, 3)
+            } else if i > 0 {
+                Divider().opacity(0.4)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+            }
         }
     }
 
