@@ -34,6 +34,9 @@ struct EditorView: View {
         .animation(Motion.quick, value: store.lastDeleted?.original)
         .animation(Motion.quick, value: store.paletteOpen)
         .tint(theme.accentSwift) // buttons/toggles/sliders/selection take the theme accent
+        // The one reactive design value. `.tint` can't carry it: it never reaches
+        // `Color.accentColor`, which is why themed panels used to select in system blue.
+        .environment(\.theme, theme)
         .overlay( // hairline edge; material below dims itself when the window loses key
             RoundedRectangle(cornerRadius: store.pill ? Radius.pill : Radius.panel, style: .continuous)
                 .strokeBorder(Color.primary.opacity(Alpha.strokeFaint), lineWidth: 1)
@@ -487,7 +490,7 @@ struct CaptureView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
-    @AppStorage("theme") private var themeID = "System"
+    @Environment(\.theme) private var theme
     @State private var nudgeDismissed = false
 
     var body: some View {
@@ -517,7 +520,7 @@ struct CaptureView: View {
             MarkdownTextView(text: $store.text,
                              fontSize: CGFloat(editorFontSize),
                              design: fontDesign,
-                             themeID: themeID)
+                             theme: theme)
 
             bottomBar
         }
@@ -1538,7 +1541,7 @@ struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
     var fontSize: CGFloat = 14
     var design: String = "system"
-    var themeID: String = "System"
+    var theme: Theme = Theme.named("System")
 
     func makeNSView(context: Context) -> NSScrollView {
         // TextKit 1 stack so our layout manager can draw full-width dividers
@@ -1582,10 +1585,12 @@ struct MarkdownTextView: NSViewRepresentable {
         guard let tv = scroll.documentView as? SmartTextView, let storage = tv.textStorage else { return }
         context.coordinator.parent = self
         if context.coordinator.fontSize != fontSize || context.coordinator.design != design
-            || context.coordinator.themeID != themeID {
+            || context.coordinator.themeID != theme.id {
             context.coordinator.fontSize = fontSize
             context.coordinator.design = design
-            context.coordinator.themeID = themeID
+            // string compare, not the whole Theme: this guard is what keeps a stray
+            // updateNSView from re-highlighting the entire document
+            context.coordinator.themeID = theme.id
             tv.font = Coordinator.baseFont(fontSize, design)
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
@@ -2114,6 +2119,8 @@ struct MarkdownTextView: NSViewRepresentable {
                   NSEvent.pressedMouseButtons == 0,
                   let lm = tv.layoutManager, let tc = tv.textContainer else { return }
             if actionPopover.contentViewController == nil {
+                // Built once and kept. Nothing here reads \.theme today; anything added that
+                // does would need re-injecting on theme change, since this host never updates.
                 actionPopover.contentViewController = NSHostingController(rootView: ActionBar(coordinator: self))
                 actionPopover.behavior = .transient
             }
