@@ -59,6 +59,13 @@ enum Hotkey {
         return false
     }
 
+    /// Release our combo. Only the updater calls this: the replacement instance launches
+    /// while this one is still alive, and two processes can't hold ⌥Space at once —
+    /// without this the new GitPad comes up with a dead hotkey.
+    static func stop() {
+        if let r = ref { UnregisterEventHotKey(r); ref = nil }
+    }
+
     // MARK: NSEvent → Carbon + display
 
     static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
@@ -229,6 +236,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Every quit path — the status menu, ⌘Q, the Settings button, and the updater's
+    /// relaunch — goes through NSApp.terminate, so this is the single place that has to
+    /// catch a note still sitting in the 1s autosave debounce. (Quitting mid-debounce
+    /// used to drop it.) saveNow's onSaved kicks a background sync that may not survive
+    /// the exit; harmless, the next launch syncs immediately.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        store.flushPendingSave()
+        return .terminateNow
+    }
+
     // double-clicking the app (or `open`) while running shows the panel
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         panel.makeKeyAndOrderFront(nil)
@@ -258,8 +275,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         openItem.title = "Open  (\(Hotkey.display))" // reflect a rebound hotkey
         // Deliberately not the orange statusImage(alert:) badge — that's the sync-failure
         // cue, and an available update is good news, not a problem to fix.
-        if case .available(let r) = store.update {
-            updateItem.title = "Update to \(r.version)…"
+        // This menu auto-enables its items, so .busy stays clickable rather than fighting
+        // that; install() single-flights, so a second click is a no-op anyway.
+        let updateTitle: String? = {
+            switch store.update {
+            case .none: return nil
+            case .available(let r): return "Update to \(r.version)…"
+            case .busy(let stage): return stage
+            case .ready(let v): return "Restart to Update to \(v)"
+            case .failed: return "Update Failed — Open Releases…"
+            }
+        }()
+        if let updateTitle { // nil = no news; leave the item hidden and fall through to Recent
+            updateItem.title = updateTitle
             updateItem.isHidden = false
             updateSeparator.isHidden = false
         }
@@ -422,7 +450,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func updateAction() {
-        guard case .available(let r) = store.update else { return }
-        NSWorkspace.shared.open(r.pageURL)
+        switch store.update {
+        case .available(let r):
+            Updater.install(r) { [weak self] in self?.store.update = $0 }
+        case .failed:
+            NSWorkspace.shared.open(Updater.releasesPage)
+        default:
+            break // .busy is already running (install single-flights); .none can't be clicked
+        }
     }
 }

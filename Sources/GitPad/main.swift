@@ -306,6 +306,25 @@ if CommandLine.arguments.contains("--selftest") {
     precondition(Updater.parse(Data("not json".utf8), "0.9.3") == nil)
     precondition(Updater.parse(nil, "0.9.3") == nil)
 
+    // Updater.swap: the move-aside that replaces a *running* bundle. A half-finished swap
+    // is the one failure here that loses the user's app, so both directions are checked.
+    let fm = FileManager.default
+    let sandbox = fm.temporaryDirectory.appendingPathComponent("gitpad-swaptest-\(getpid())")
+    try? fm.removeItem(at: sandbox)
+    try! fm.createDirectory(at: sandbox.appendingPathComponent("staged"), withIntermediateDirectories: true)
+    let live = sandbox.appendingPathComponent("GitPad.app")
+    let fresh = sandbox.appendingPathComponent("staged/GitPad.app")
+    try! "old".write(to: live, atomically: true, encoding: .utf8)
+    try! "new".write(to: fresh, atomically: true, encoding: .utf8)
+    precondition(Updater.swap(live, with: fresh) == nil)
+    precondition((try? String(contentsOf: live, encoding: .utf8)) == "new", "swap didn't install")
+    precondition(try! fm.contentsOfDirectory(atPath: sandbox.path)
+        .allSatisfy { !$0.hasPrefix(".GitPad.app.old-") }, "move-aside copy left behind")
+    // source gone → must fail *and* roll the original back, not leave an empty slot
+    precondition(Updater.swap(live, with: sandbox.appendingPathComponent("absent.app")) != nil)
+    precondition((try? String(contentsOf: live, encoding: .utf8)) == "new", "rollback lost the app")
+    try? fm.removeItem(at: sandbox)
+
     print("selftest OK")
     exit(0)
 }

@@ -914,20 +914,7 @@ struct SettingsView: View {
                     // The opt-out is what keeps SECURITY.md's "no network calls except your
                     // git remote" honest — off means the app never contacts github.com.
                     Toggle("Check automatically", isOn: $autoCheckUpdates)
-                    if case .available(let r) = store.update {
-                        LabeledContent("Version \(r.version) is available") {
-                            Button("View Release") { NSWorkspace.shared.open(r.pageURL) }
-                        }
-                    } else {
-                        LabeledContent {
-                            Button(checkingUpdate ? "Checking…" : "Check for Updates") { checkForUpdates() }
-                                .disabled(checkingUpdate)
-                        } label: {
-                            if let checkNote {
-                                Text(checkNote).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                    updateRow
                 } header: {
                     Text("Updates")
                 } footer: {
@@ -1057,6 +1044,38 @@ struct SettingsView: View {
     private func saveRemote() {
         GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
         store.requestSync?()
+    }
+
+    /// The one row that changes with `store.update`. Everything here is a plain Form row —
+    /// an update never takes over the screen, and never appears over the editor at all.
+    @ViewBuilder private var updateRow: some View {
+        switch store.update {
+        case .available(let r):
+            LabeledContent("Version \(r.version) is available") {
+                HStack(spacing: 10) {
+                    Button("Update") { Updater.install(r) { store.update = $0 } }
+                    Button("View Release") { NSWorkspace.shared.open(r.pageURL) }
+                        .buttonStyle(.plain).foregroundStyle(.tint)
+                }
+            }
+        case .busy(let stage):
+            LabeledContent(stage) { ProgressView().controlSize(.small) }
+        case .failed(let why):
+            LabeledContent {
+                Button("View Releases") { NSWorkspace.shared.open(Updater.releasesPage) }
+            } label: {
+                Text(why).font(.caption).foregroundStyle(.secondary)
+            }
+        case .none, .ready: // .ready only exists once staging lands
+            LabeledContent {
+                Button(checkingUpdate ? "Checking…" : "Check for Updates") { checkForUpdates() }
+                    .disabled(checkingUpdate)
+            } label: {
+                if let checkNote {
+                    Text(checkNote).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     /// Same shape as refreshGitInfo: kick off-main, land back on main. Unlike the timer's

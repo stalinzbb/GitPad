@@ -592,6 +592,13 @@ final class NoteStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
+    /// Write a still-debounced edit right now. `saveWork` is private, so a caller about to
+    /// end the process (quit, or the updater's relaunch) has no other way to ask whether
+    /// typing is sitting in the 1s window — and that window used to be dropped on the floor.
+    func flushPendingSave() {
+        if saveWork != nil { saveNow() }
+    }
+
     func saveNow() {
         saveWork?.cancel() // any pending debounce is now redundant (no-op if this IS it)
         saveWork = nil
