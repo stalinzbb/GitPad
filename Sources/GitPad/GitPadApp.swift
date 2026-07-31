@@ -230,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             if store.screen != .onboarding {
                 store.screen = .capture
-                store.selected = store.dailyNote() // ⌥Space always lands on today
+                store.selectDaily() // ⌥Space always lands on today
             }
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -280,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func appendClipboard() {
         guard let clip = NSPasteboard.general.string(forType: .string),
               !clip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        store.selected = store.dailyNote()
+        store.selectDaily()
         store.screen = .capture
         store.appendToDaily(clip)
         showPanel()
@@ -303,7 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             store.screen = .capture
             showPanel()
         case "daily":
-            store.selected = store.dailyNote()
+            store.selectDaily()
             store.screen = .capture
             if let append = value("append") { store.appendToDaily(append) }
             showPanel()

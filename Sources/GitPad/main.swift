@@ -21,6 +21,17 @@ if CommandLine.arguments.contains("--uitest") {
         return (tv, coord)
     }
     func spin() { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) } // flush deferred renumber
+    // NSTextView takes its undo manager from its window, so undo tests need one. Borderless
+    // and never ordered in — nothing appears on screen.
+    var undoWindows: [NSWindow] = [] // keep alive; a released window drops the undo manager
+    func makeUndoableEditor(_ text: String) -> (SmartTextView, MarkdownTextView.Coordinator) {
+        let (tv, coord) = makeEditor(text)
+        let w = NSWindow(contentRect: tv.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        w.contentView?.addSubview(tv)
+        w.makeFirstResponder(tv)
+        undoWindows.append(w)
+        return (tv, coord)
+    }
 
     // Tab on a caret at end of a list line: line indents, caret stays at its text position
     var (tv, coord) = makeEditor("- one\n- two\n")
@@ -125,6 +136,39 @@ if CommandLine.arguments.contains("--uitest") {
     tv.insertText("", replacementRange: tv.selectedRange())
     spin()
     precondition(tv.string == "1. a\n2. c\n", tv.string)
+
+    // Undo across a renumbering edit must converge on the original and keep redo alive.
+    // The deferred renumber is its own top-level group (the event group has closed by the
+    // time it runs), so an Enter mid-list is two presses — but each ⌘Z must make progress.
+    // Before the fix it ping-ponged: undo ran the renumber again, which registered a *new*
+    // group and wiped the redo stack, so the list never came back.
+    (tv, coord) = makeUndoableEditor("1. a\n2. b\n3. c\n")
+    tv.setSelectedRange(NSRange(location: 9, length: 0)) // end of "2. b"
+    precondition(coord.textView(tv, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+    spin()
+    precondition(tv.string == "1. a\n2. b\n3. \n4. c\n", tv.string)
+    tv.undoManager?.undo() // the renumber
+    spin()
+    precondition(tv.string == "1. a\n2. b\n3. \n3. c\n", "undo #1 didn't revert the renumber: \(tv.string)")
+    tv.undoManager?.undo() // the Enter
+    spin()
+    precondition(tv.string == "1. a\n2. b\n3. c\n", "undo #2 didn't restore the original: \(tv.string)")
+    precondition(tv.undoManager?.canRedo == true, "redo stack cleared — the renumber re-registered")
+    tv.undoManager?.redo(); spin()
+    tv.undoManager?.redo(); spin()
+    precondition(tv.string == "1. a\n2. b\n3. \n4. c\n", "redo didn't replay: \(tv.string)")
+
+    // A no-op Shift-Tab must not eat the previous undo. indentList used to open its own undo
+    // group around edits that all skipped, pushing an empty group that swallowed one ⌘Z.
+    (tv, coord) = makeUndoableEditor("- one\n")
+    tv.setSelectedRange(NSRange(location: 5, length: 0))
+    tv.insertText(" two", replacementRange: tv.selectedRange())
+    spin()
+    precondition(coord.textView(tv, doCommandBy: #selector(NSResponder.insertBacktab(_:)))) // no indent to strip
+    precondition(tv.string == "- one two\n", tv.string)
+    tv.undoManager?.undo()
+    spin()
+    precondition(tv.string == "- one\n", "empty undo group swallowed the edit: \(tv.string)")
 
     print("uitest OK")
     exit(0)
