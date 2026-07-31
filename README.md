@@ -55,6 +55,7 @@ Requires macOS 13+ and the Xcode command-line tools (`xcode-select --install`).
 |-----|--------|
 | ⌥Space | Toggle the panel (or expand the pill) |
 | ⌘N | New note |
+| ⌘K | Command palette — run any command, or find a note |
 | ⌘L | Library ⇄ note |
 | ⌘S | Save now (also commits + pushes) |
 | ⌘⌫ | Delete current note |
