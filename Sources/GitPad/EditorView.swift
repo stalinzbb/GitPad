@@ -271,11 +271,39 @@ struct UndoDeleteBanner: View {
 
 /// One palette entry. A static array, not menu-derived: half these commands
 /// (Sync Now, Set Up Sync, Reveal in Finder) live in the status menu or no menu at all.
+/// `group` is the section header the row sits under, in array order.
 struct PaletteCommand {
+    let group: String
     let title: String
     let symbol: String
     var keys: String = ""
     let run: () -> Void
+}
+
+/// A key combo you can actually read: the same chip the hotkey recorder uses, so the
+/// palette, the shortcuts table and Settings all render a binding identically.
+struct KeyChip: View {
+    let keys: String
+
+    var body: some View {
+        Text(keys)
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.primary.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+}
+
+/// Section label, matching the Library's group headers.
+struct SectionLabel: View {
+    let text: String
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            .tracking(0.6)
+    }
 }
 
 /// ⌘K: one field over every command plus note search, floating above whatever screen
@@ -295,30 +323,44 @@ struct CommandPalette: View {
 
     private var commands: [PaletteCommand] {
         var c: [PaletteCommand] = [
-            PaletteCommand(title: "New Note", symbol: ChromeGlyph.newNote, keys: "⌘N") { store.newNote() },
-            PaletteCommand(title: "Open Daily Note", symbol: "calendar") { store.open(store.dailyNote()) },
-            PaletteCommand(title: "Library", symbol: ChromeGlyph.library, keys: "⌘L") { store.screen = .library },
-            PaletteCommand(title: "Search Library", symbol: "magnifyingglass") { store.searchNotes() },
-            PaletteCommand(title: "Save & Sync", symbol: "square.and.arrow.down", keys: "⌘S") { store.saveNow() },
-            PaletteCommand(title: "Delete Note", symbol: "trash", keys: "⌘⌫") { store.deleteCurrent() },
-        ]
-        if store.lastDeleted != nil {
-            c.append(PaletteCommand(title: "Undo Delete", symbol: "arrow.uturn.backward") { store.undoDelete() })
-        }
-        c += [
-            PaletteCommand(title: "Minimize to Pill", symbol: ChromeGlyph.minimize, keys: "⌘M") { store.setPill?(true) },
-            PaletteCommand(title: "Settings", symbol: ChromeGlyph.settings, keys: "⌘,") { store.openSettings() },
-            PaletteCommand(title: "Set Up Sync", symbol: "arrow.triangle.branch") { store.screen = .gitSetup },
-            PaletteCommand(title: "Sync Now", symbol: "arrow.clockwise") { store.requestSync?() },
-            PaletteCommand(title: "Append Clipboard to Daily", symbol: "doc.on.clipboard") {
+            PaletteCommand(group: "Notes", title: "New Note",
+                           symbol: ChromeGlyph.newNote, keys: "⌘N") { store.newNote() },
+            PaletteCommand(group: "Notes", title: "Open Daily Note",
+                           symbol: "calendar") { store.open(store.dailyNote()) },
+            PaletteCommand(group: "Notes", title: "Append Clipboard to Daily",
+                           symbol: "doc.on.clipboard") {
                 guard let clip = NSPasteboard.general.string(forType: .string),
                       !clip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                 store.open(store.dailyNote())
                 store.appendToDaily(clip)
             },
-            PaletteCommand(title: "Reveal Notes in Finder", symbol: "folder") {
+            PaletteCommand(group: "Notes", title: "Delete Note",
+                           symbol: "trash", keys: "⌘⌫") { store.deleteCurrent() },
+        ]
+        if store.lastDeleted != nil {
+            c.append(PaletteCommand(group: "Notes", title: "Undo Delete",
+                                    symbol: "arrow.uturn.backward") { store.undoDelete() })
+        }
+        c += [
+            // ⌘L is a toggle, so name it for where it actually goes from here
+            PaletteCommand(group: "Go", title: store.screen == .library ? "Back to Note" : "Library",
+                           symbol: store.screen == .library ? ChromeGlyph.back : ChromeGlyph.library,
+                           keys: "⌘L") { store.toggleLibrary() },
+            PaletteCommand(group: "Go", title: "Search Library",
+                           symbol: "magnifyingglass") { store.searchNotes() },
+            PaletteCommand(group: "Go", title: "Settings",
+                           symbol: ChromeGlyph.settings, keys: "⌘,") { store.openSettings() },
+            PaletteCommand(group: "Go", title: "Reveal Notes in Finder", symbol: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([store.dir])
             },
+            PaletteCommand(group: "Sync", title: "Save & Sync",
+                           symbol: "square.and.arrow.down", keys: "⌘S") { store.saveNow() },
+            PaletteCommand(group: "Sync", title: "Sync Now",
+                           symbol: "arrow.clockwise") { store.requestSync?() },
+            PaletteCommand(group: "Sync", title: "Set Up Sync",
+                           symbol: "arrow.triangle.branch") { store.screen = .gitSetup },
+            PaletteCommand(group: "Window", title: "Minimize to Pill",
+                           symbol: ChromeGlyph.minimize, keys: "⌘M") { store.setPill?(true) },
         ]
         return c
     }
@@ -387,8 +429,17 @@ struct CommandPalette: View {
         ScrollViewReader { proxy in
             ScrollView {
                 let rows = items
-                LazyVStack(spacing: 1) {
-                    ForEach(rows.indices, id: \.self) { i in row(rows[i], i) }
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(rows.indices, id: \.self) { i in
+                        // header whenever the group changes — cheaper than a nested
+                        // structure, and it keeps `index` addressing selectable rows only
+                        if i == 0 || group(rows[i]) != group(rows[i - 1]) {
+                            SectionLabel(text: group(rows[i]))
+                                .padding(.horizontal, 8)
+                                .padding(.top, i == 0 ? 2 : 9).padding(.bottom, 3)
+                        }
+                        row(rows[i], i)
+                    }
                 }
                 .padding(6)
             }
@@ -399,18 +450,18 @@ struct CommandPalette: View {
     }
 
     private func row(_ item: Item, _ i: Int) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: symbol(item))
-                .font(.system(size: 12))
-                .frame(width: 16)
+                .font(.system(size: 13, weight: .medium)) // same glyph weight as the chrome
+                .frame(width: 18)
                 .foregroundStyle(.secondary)
             Text(label(item)).font(.callout).lineLimit(1)
-            Spacer(minLength: 0)
-            if case .cmd(let c) = item {
-                Text(commands[c].keys).font(.caption.monospaced()).foregroundStyle(.tertiary)
+            Spacer(minLength: 8)
+            if case .cmd(let c) = item, !commands[c].keys.isEmpty {
+                KeyChip(keys: commands[c].keys)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
+        .padding(.horizontal, 8).padding(.vertical, 4)
         .background(i == index ? Color.accentColor.opacity(0.18) : .clear,
                     in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
@@ -429,6 +480,13 @@ struct CommandPalette: View {
         switch item {
         case .cmd(let i): return commands[i].symbol
         case .note: return "doc.text"
+        }
+    }
+
+    private func group(_ item: Item) -> String {
+        switch item {
+        case .cmd(let i): return commands[i].group
+        case .note: return query.trimmingCharacters(in: .whitespaces).isEmpty ? "Recent" : "Matches"
         }
     }
 
@@ -584,26 +642,45 @@ final class LeanScroller: NSScroller {
 }
 
 /// Give a SwiftUI ScrollView/List/Form the same lean scroller: `.background(LeanScrollbar())`
-/// on the scrolling container. The helper view lands as a sibling of the NSScrollView SwiftUI
-/// made, so it looks there — nothing private, and a miss just leaves the stock scroller.
+/// on the scrolling container.
+///
+/// The work happens in `viewDidMoveToWindow`, NOT `updateNSView` — SwiftUI never calls
+/// update on a `.background()` representable, so an update-based version is dead code.
+/// SwiftUI also wraps the helper in its own host view, so the scroll view is never a
+/// sibling: climb ancestors until one of them contains it. Nothing private; a miss just
+/// leaves the stock scroller in place.
 struct LeanScrollbar: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+    func makeNSView(context: Context) -> NSView { Swapper(frame: .zero) }
+    func updateNSView(_ v: NSView, context: Context) {}
 
-    func updateNSView(_ v: NSView, context: Context) {
-        // async: on the first pass the view isn't in the hierarchy yet
-        DispatchQueue.main.async {
-            guard let container = v.superview else { return }
-            Self.apply(in: container)
+    final class Swapper: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            // async: the sibling scroll view isn't built yet on the first pass
+            DispatchQueue.main.async { [weak self] in
+                guard let start = self?.superview else { return }
+                var node: NSView? = start
+                for _ in 0..<6 { // bounded, so we can't wander into an unrelated screen
+                    guard let n = node else { return }
+                    if let sv = Swapper.firstScrollView(in: n) {
+                        guard !(sv.verticalScroller is LeanScroller) else { return }
+                        sv.verticalScroller = LeanScroller()
+                        sv.tile() // else the swapped-in scroller lays out 0pt wide
+                        return
+                    }
+                    node = n.superview
+                }
+            }
         }
-    }
 
-    /// First scroll view on each branch wins — don't reach into a nested one.
-    private static func apply(in view: NSView) {
-        if let sv = view as? NSScrollView {
-            if !(sv.verticalScroller is LeanScroller) { sv.verticalScroller = LeanScroller() }
-            return
+        static func firstScrollView(in view: NSView) -> NSScrollView? {
+            if let sv = view as? NSScrollView { return sv }
+            for sub in view.subviews {
+                if let hit = firstScrollView(in: sub) { return hit }
+            }
+            return nil
         }
-        view.subviews.forEach(apply)
     }
 }
 
@@ -1077,9 +1154,7 @@ struct ShortcutsList: View {
 
     private func rows(_ items: [(String, String)]) -> some View {
         ForEach(items, id: \.0) { label, keys in
-            LabeledContent(label) {
-                Text(keys).font(.callout.monospaced()).foregroundStyle(.secondary)
-            }
+            LabeledContent(label) { KeyChip(keys: keys) }
         }
     }
 }
