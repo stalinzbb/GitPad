@@ -312,6 +312,10 @@ struct CommandPalette: View {
     @ObservedObject var store: NoteStore
     @State private var query = ""
     @State private var index = 0
+    /// Hover highlights, but never moves the keyboard selection. Letting it drive `index`
+    /// is the usual palette bug: the pointer sits still, ↓ scrolls a different row under
+    /// it, that row fires onHover and steals the selection back.
+    @State private var hovered: Int?
     @State private var monitor: Any?
     @FocusState private var focused: Bool
 
@@ -439,7 +443,9 @@ struct CommandPalette: View {
                 .background(LeanScrollbar()) // inside the content → enclosingScrollView hits
             }
             .frame(maxHeight: 380)
-            .onChange(of: index) { proxy.scrollTo($0, anchor: .center) }
+            // nil anchor = scroll the minimum to reveal the row. `.center` re-centred on
+            // every keypress, so the first ↓ yanked the whole list down to centre row 1.
+            .onChange(of: index) { proxy.scrollTo($0) }
         }
     }
 
@@ -477,9 +483,16 @@ struct CommandPalette: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(i == index ? Color.accentColor.opacity(0.18) : .clear,
+        // hover is its own, lighter state — it deliberately does NOT move `index`
+        // (see the note on `hovered`), so the two can show at once
+        .background(i == index ? Color.accentColor.opacity(0.18)
+                               : (hovered == i ? Color.primary.opacity(0.06) : .clear),
                     in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
+        .onHover { inside in
+            if inside { hovered = i } else if hovered == i { hovered = nil }
+        }
+        .animation(Motion.quick, value: hovered)
         .onTapGesture { run(item) }
         .id(i)
     }
