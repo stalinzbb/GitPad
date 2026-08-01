@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct OnboardingView: View {
     @ObservedObject var store: NoteStore
@@ -12,9 +13,13 @@ struct OnboardingView: View {
         ("text.badge.checkmark", "Just type",
          "It saves itself. Type / for commands,\n⌘N for a new note, ⌘L for your library."),
         ("arrow.triangle.branch", "Sync with git",
-         "Optional. Create a private repo (github.com/new),\npaste its SSH URL, and your notes follow you everywhere.\nUses your existing SSH keys — nothing to log into."),
+         "Optional. Keep your notes in a private git repo\nand they follow you everywhere."),
     ] }
     @State private var testResult: String?
+    @State private var ghReady = false
+    @State private var working = false
+    /// Set when the host rejected our SSH key — names the key to copy, same as Fix sync.
+    @State private var sshKeyToFix: String?
 
     var body: some View {
         VStack(spacing: 14) {
@@ -27,18 +32,49 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             if step == 2 {
+                // Signed in to the gh CLI → skip the whole create-a-repo-and-paste-a-URL
+                // dance; it's the same one-click path Settings → Set up sync offers.
+                if ghReady {
+                    Button { createRepo() } label: {
+                        Label(working ? "Creating…" : "Create a private repo for me",
+                              systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(working)
+                    Text("or paste a repo URL:")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                } else {
+                    Link("Open github.com/new ↗", destination: URL(string: "https://github.com/new")!)
+                        .font(.callout)
+                }
                 HStack(spacing: 6) {
                     TextField("git@github.com:you/notes.git", text: $remote)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 240)
                     Button("Test") { testConnection() }
-                        .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty || working)
                 }
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                 if let result = testResult {
                     Text(result)
                         .font(.caption)
                         .foregroundStyle(result.hasPrefix("✓") ? Color.green : result == "…" ? Color.secondary : Color.red)
+                    if result.hasPrefix("✗") {
+                        Text("Clear the URL to skip sync for now.")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+                if let key = sshKeyToFix {
+                    HStack(spacing: 10) {
+                        Button("Copy public key") {
+                            let pub = (try? String(contentsOfFile: key + ".pub", encoding: .utf8)) ?? ""
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(pub, forType: .string)
+                        }
+                        Link("Add a key on GitHub ↗",
+                             destination: URL(string: "https://github.com/settings/ssh/new")!)
+                    }
+                    .font(.caption)
                 }
             }
             Spacer()
@@ -56,9 +92,17 @@ struct OnboardingView: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
+            .disabled(working)
             .padding(.bottom, 24)
         }
         .padding()
+        .onAppear {
+            // finishes long before anyone reaches page 3 (same hop as GitSetupView)
+            DispatchQueue.global().async {
+                let gh = GitSync.ghReady()
+                DispatchQueue.main.async { ghReady = gh }
+            }
+        }
     }
 
     @ViewBuilder private var symbol: some View {
@@ -83,14 +127,65 @@ struct OnboardingView: View {
         DispatchQueue.global().async {
             let r = GitSync.run(["ls-remote", url], in: store.dir)
             DispatchQueue.main.async {
-                testResult = r.status == 0 ? "✓ Connected" : "✗ " + GitSync.friendlyError(r.out)
+                if r.status == 0 { testResult = "✓ Connected"; sshKeyToFix = nil }
+                else { classify(r.out) }
             }
         }
     }
 
+    /// One friendly line for a failed reachability check — plus the key to copy when the
+    /// host rejected this Mac's SSH key, so the fix is right here instead of in Settings.
+    private func classify(_ out: String) {
+        testResult = "✗ " + GitSync.friendlyError(out)
+        let s = out.lowercased()
+        sshKeyToFix = s.contains("permission denied") || s.contains("publickey")
+            ? GitSync.offeredSSHKey(in: store.dir) : nil
+    }
+
+    /// gh CLI path: make the repo, wire up auth, sync once. Same call chain as
+    /// GitSetupView — it fills in `remote`, so finishing then takes the normal route.
+    private func createRepo() {
+        working = true
+        testResult = "…"
+        DispatchQueue.global().async {
+            let url = GitSync.ghCreateRepo("gitpad-notes")
+            let ok = url.map { u -> Bool in
+                GitSync.setRemote(u, in: store.dir)
+                return GitSync.sync(dir: store.dir)
+            } ?? false
+            DispatchQueue.main.async {
+                working = false
+                if let url, ok {
+                    remote = url
+                    testResult = "✓ Repo created & synced"
+                    sshKeyToFix = nil
+                } else {
+                    testResult = "✗ Couldn't create the repo — paste a URL instead"
+                }
+            }
+        }
+    }
+
+    /// Empty field = skip sync, instantly. A URL that's been typed gets checked first:
+    /// saving an unreachable remote silently is how people ended up thinking sync worked.
     private func finish() {
         let url = remote.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !url.isEmpty { GitSync.setRemote(url, in: store.dir) }
+        guard !url.isEmpty else { return done() }
+        working = true
+        testResult = "…"
+        DispatchQueue.global().async {
+            let r = GitSync.run(["ls-remote", url], in: store.dir)
+            DispatchQueue.main.async {
+                working = false
+                guard r.status == 0 else { return classify(r.out) } // stay on this page
+                GitSync.setRemote(url, in: store.dir)
+                if url.hasPrefix("https://") { GitSync.enableHTTPSAuth() }
+                done()
+            }
+        }
+    }
+
+    private func done() {
         onboarded = true
         store.screen = .capture
     }

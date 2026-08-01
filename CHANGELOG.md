@@ -13,6 +13,12 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
   zero dependencies — and every tool goes through `NoteStore`, so search folding and
   daily-note naming match the app exactly. Git stays read-only unless you pass
   `--allow-sync`; `--exclude <folder>` keeps folders out of it entirely. (#25)
+- **Onboarding sets up sync for real.** The last first-run page now offers the same
+  one-click "Create a private repo for me" as Settings when the `gh` CLI is signed
+  in, and a github.com/new link when it isn't. "Start writing" checks a typed URL
+  before saving it instead of silently storing a broken remote, and an SSH key the
+  host rejected gets *Copy public key* / *Add a key on GitHub* right on the page.
+  An empty field still skips sync instantly. (#44)
 
 ## [0.9.3] — 2026-07-31
 
