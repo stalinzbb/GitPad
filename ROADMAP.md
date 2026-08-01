@@ -27,7 +27,10 @@ or it doesn't ship.
 - [ ] CLI companion (`gitpad new "…"`).
 - [ ] Spotlight importer.
 - [ ] Launch at login.
-- [ ] Sparkle auto-updates.
+- [x] **Built-in updates** — daily check, one-click install, and an optional
+      auto-update that stages in the background and installs on quit. No Sparkle: a
+      dependency-free updater is ~300 lines against GitHub Releases, and the zero
+      third-party dependency rule is worth more than the saved effort.
 - [ ] Homebrew cask.
 - [ ] Localization.
 

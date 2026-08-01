@@ -841,9 +841,13 @@ struct SettingsView: View {
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
+    @AppStorage("autoCheckUpdates") private var autoCheckUpdates = true
+    @AppStorage("autoUpdate") private var autoUpdate = false
     @State private var remote = ""
     @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
+    @State private var checkingUpdate = false
+    @State private var checkNote: String? // manual-check result only; the timer stays silent
 
     /// Local state, deliberately NOT new `Screen` cases: those would multiply the
     /// `goBack()` / settingsReturn branches for nothing. Esc and ⌘, keep working as-is;
@@ -905,6 +909,26 @@ struct SettingsView: View {
                     Text("The quick brown fox jumps over the lazy dog.")
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
+                }
+                Section {
+                    LabeledContent("Version") { Text(Updater.currentVersion ?? "dev") }
+                    // The opt-out is what keeps SECURITY.md's "no network calls except your
+                    // git remote" honest — off means the app never contacts github.com.
+                    Toggle("Check automatically", isOn: $autoCheckUpdates)
+                    if autoCheckUpdates {
+                        Toggle("Install updates automatically", isOn: $autoUpdate)
+                    }
+                    updateRow
+                } header: {
+                    Text("Updates")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Checks github.com/stalinzbb/GitPad about once a day. Nothing is sent except the request.")
+                        if autoCheckUpdates && autoUpdate {
+                            Text("Downloads and verifies in the background, then installs when you quit — or right away with Restart to Update. Never while you're writing.")
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     Button(role: .destructive) {
@@ -1029,6 +1053,58 @@ struct SettingsView: View {
     private func saveRemote() {
         GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
         store.requestSync?()
+    }
+
+    /// The one row that changes with `store.update`. Everything here is a plain Form row —
+    /// an update never takes over the screen, and never appears over the editor at all.
+    @ViewBuilder private var updateRow: some View {
+        switch store.update {
+        case .available(let r):
+            LabeledContent("Version \(r.version) is available") {
+                HStack(spacing: 10) {
+                    Button("Update") { Updater.install(r) { store.update = $0 } }
+                    Button("View Release") { NSWorkspace.shared.open(r.pageURL) }
+                        .buttonStyle(.plain).foregroundStyle(.tint)
+                }
+            }
+        case .busy(let stage):
+            LabeledContent(stage) { ProgressView().controlSize(.small) }
+        case .failed(let why):
+            LabeledContent {
+                Button("View Releases") { NSWorkspace.shared.open(Updater.releasesPage) }
+            } label: {
+                Text(why).font(.caption).foregroundStyle(.secondary)
+            }
+        case .ready(let v):
+            LabeledContent("Version \(v) is ready") {
+                Button("Restart to Update") { Updater.installStagedNow { store.update = $0 } }
+            }
+        case .none:
+            LabeledContent {
+                Button(checkingUpdate ? "Checking…" : "Check for Updates") { checkForUpdates() }
+                    .disabled(checkingUpdate)
+            } label: {
+                if let checkNote {
+                    Text(checkNote).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Same shape as refreshGitInfo: kick off-main, land back on main. Unlike the timer's
+    /// check this one asked for an answer, so "couldn't reach GitHub" is said out loud.
+    private func checkForUpdates() {
+        checkingUpdate = true
+        checkNote = nil
+        Updater.check { release, ok in
+            checkingUpdate = false
+            UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
+            if let release {
+                store.update = .available(release)
+            } else {
+                checkNote = ok ? "Up to date" : "Couldn't check"
+            }
+        }
     }
 
     private func refreshGitInfo() {

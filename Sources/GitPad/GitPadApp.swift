@@ -59,6 +59,13 @@ enum Hotkey {
         return false
     }
 
+    /// Release our combo. Only the updater calls this: the replacement instance launches
+    /// while this one is still alive, and two processes can't hold ⌥Space at once —
+    /// without this the new GitPad comes up with a dead hotkey.
+    static func stop() {
+        if let r = ref { UnregisterEventHotKey(r); ref = nil }
+    }
+
     // MARK: NSEvent → Carbon + display
 
     static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
@@ -103,7 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var openItem: NSMenuItem!
     var revealItem: NSMenuItem!         // anchor for inserting the dynamic recent-notes section
     var recentItems: [NSMenuItem] = []  // dynamically rebuilt on each menu open
+    var updateItem: NSMenuItem!         // hidden until a check finds a newer release
+    var updateSeparator: NSMenuItem!
     var syncTimer: Timer?
+    var updateTimer: Timer?
     private var lastSyncKick = Date.distantPast
     private var pillDragOrigin: NSRect?
     private var pillDragMouse: NSPoint?
@@ -160,6 +170,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = statusImage(alert: false)
         let menu = NSMenu()
+        // Added first so they sit at index 0/1, above everything. Both stay hidden until
+        // menuNeedsUpdate sees a release — an empty slot beats shuffling indices later.
+        updateItem = menu.addItem(withTitle: "Update Available…", action: #selector(updateAction), keyEquivalent: "")
+        updateItem.isHidden = true
+        updateSeparator = .separator()
+        updateSeparator.isHidden = true
+        menu.addItem(updateSeparator)
         openItem = menu.addItem(withTitle: "Open  (\(Hotkey.display))", action: #selector(togglePanel), keyEquivalent: "")
         menu.addItem(withTitle: "Append Clipboard to Daily", action: #selector(appendClipboard), keyEquivalent: "")
         menu.addItem(withTitle: "Sync Now", action: #selector(syncNow), keyEquivalent: "")
@@ -204,13 +221,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.panel.appearance = name.flatMap { NSAppearance(named: $0) }
         }
         syncTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.backgroundSync() }
+        // 6h tick, but checkForUpdates throttles to ~once a day — the timer only exists so
+        // a Mac that stays awake for a week still notices a release.
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 21_600, repeats: true) { [weak self] _ in
+            self?.checkForUpdates()
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
         backgroundSync()
+        checkForUpdates()
 
         // show the panel on first launch so opening the app isn't a no-op
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Every quit path — the status menu, ⌘Q, the Settings button, and the updater's
+    /// relaunch — goes through NSApp.terminate, so this is the single place that has to
+    /// catch a note still sitting in the 1s autosave debounce. (Quitting mid-debounce
+    /// used to drop it.) saveNow's onSaved kicks a background sync that may not survive
+    /// the exit; harmless, the next launch syncs immediately.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        store.flushPendingSave()
+        // Gated on the toggle, not merely on a stage existing: switching "Install updates
+        // automatically" off has to stop the automatic install too, or the switch lies.
+        // The staged bundle stays put, and "Restart to Update" still offers it explicitly.
+        if UserDefaults.standard.bool(forKey: "autoUpdate") { Updater.installStagedQuietly() }
+        return .terminateNow
     }
 
     // double-clicking the app (or `open`) while running shows the panel
@@ -240,6 +277,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         openItem.title = "Open  (\(Hotkey.display))" // reflect a rebound hotkey
+        // Deliberately not the orange statusImage(alert:) badge — that's the sync-failure
+        // cue, and an available update is good news, not a problem to fix.
+        // This menu auto-enables its items, so .busy stays clickable rather than fighting
+        // that; install() single-flights, so a second click is a no-op anyway.
+        let updateTitle: String? = {
+            switch store.update {
+            case .none: return nil
+            case .available(let r): return "Update to \(r.version)…"
+            case .busy(let stage): return stage
+            case .ready(let v): return "Restart to Update to \(v)"
+            case .failed: return "Update Failed — Open Releases…"
+            }
+        }()
+        if let updateTitle { // nil = no news; leave the item hidden and fall through to Recent
+            updateItem.title = updateTitle
+            updateItem.isHidden = false
+            updateSeparator.isHidden = false
+        }
         // rebuild the "Recent" section directly above "Reveal Notes in Finder"
         recentItems.forEach(menu.removeItem)
         recentItems.removeAll()
@@ -377,5 +432,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showGitSetup() {
         store.screen = .gitSetup
         showPanel()
+    }
+
+    // MARK: updates
+
+    /// Release check. Silent by design: a failure leaves `store.update` untouched, so a
+    /// flaky network never nags and never clears a release we already found.
+    /// `force` (the Settings button) skips the throttle; nothing skips the opt-out.
+    func checkForUpdates(force: Bool = false) {
+        guard Updater.currentVersion != nil else { return } // `swift run`: no bundle, no version
+        let d = UserDefaults.standard
+        if !force {
+            guard d.object(forKey: "autoCheckUpdates") as? Bool ?? true else { return }
+            let last = d.object(forKey: "lastUpdateCheck") as? Date ?? .distantPast
+            guard Date().timeIntervalSince(last) > 72_000 else { return } // ~20h: once a day
+        }
+        Updater.check { [weak self] release, _ in
+            d.set(Date(), forKey: "lastUpdateCheck")
+            guard let self, let release else { return }
+            // Already fetched this exact release in an earlier session — don't pay for it
+            // twice, just re-offer the restart.
+            if Updater.stagedVersionOnDisk == release.version {
+                store.update = .ready(release.version)
+                return
+            }
+            store.update = .available(release)
+            guard d.bool(forKey: "autoUpdate") else { return }
+            Updater.stage(release) { [weak self] s in
+                // Staging failure stays silent: .available is still on screen and the
+                // manual Update button still works. Nothing is worth a nag here.
+                if case .failed = s { return }
+                self?.store.update = s
+            }
+        }
+    }
+
+    @objc func updateAction() {
+        switch store.update {
+        case .available(let r):
+            Updater.install(r) { [weak self] in self?.store.update = $0 }
+        case .ready:
+            Updater.installStagedNow { [weak self] in self?.store.update = $0 }
+        case .failed:
+            NSWorkspace.shared.open(Updater.releasesPage)
+        default:
+            break // .busy is already running (install single-flights); .none can't be clicked
+        }
     }
 }
