@@ -236,6 +236,13 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--sync" {
     exit(GitSync.sync(dir: URL(fileURLWithPath: CommandLine.arguments[2])) ? 0 : 1)
 }
 
+// MCP server over stdio: GitPad --mcp [--allow-sync] [--exclude <folder>]…
+// Before the AppKit spin-up below — this mode never shows a UI.
+if CommandLine.arguments.contains("--mcp") {
+    MCPServer.run()
+    exit(0)
+}
+
 // Library row parser check: GitPad --selftest (precondition, so it survives -c release)
 if CommandLine.arguments.contains("--selftest") {
     let m = NoteStore.parseMeta("# Title\n\nsome body\n- [x] a\n- [ ] b\n")

@@ -9,6 +9,10 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
 
 - **Build:** `./build.sh` → `GitPad.app` (SwiftPM release build + ad-hoc codesign; also
   regenerates `Resources/AppIcon.icns` via `make-icns.sh` → `make-icon.swift` when stale).
+- **Test (MCP):** `./test_mcp.sh` — pipes JSON-RPC into the real binary (`GitPad --mcp`)
+  against a temp notes repo: handshake, tool list, search folding, todos, history,
+  create/append, path traversal, `--exclude`. Run after any change in `MCPServer.swift`
+  or to `NoteStore`'s search/daily/title behaviour.
 - **Test:** `./test_gitsync.sh` — drives the real binary (`GitPad --sync <dir>`) through a
   bare remote: same-line conflicts, unrelated histories, true-conflict-only copies,
   modify/delete, push retry, new-device adoption (and its negative guard). Run after any
@@ -20,17 +24,18 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
   at a scratch notes folder: `GITPAD_DIR=/tmp/gitpad-dev ./GitPad.app/Contents/MacOS/GitPad`.
   Without `GITPAD_DIR` a dev build edits `~/Documents/GitPad` and syncs to the real remote.
 
-## Source map (7 files, `Sources/GitPad/`)
+## Source map (8 files, `Sources/GitPad/`)
 
 | File | Role |
 |------|------|
-| `main.swift` | Entry point + `--sync <dir>` CLI mode for tests |
+| `main.swift` | Entry point + `--sync <dir>` / `--mcp` CLI modes (both before the AppKit spin-up) |
 | `GitPadApp.swift` | AppDelegate: status item, main-menu "Note" shortcuts, global hotkey, sync scheduling, URL scheme |
 | `PanelWindow.swift` | Floating borderless NSPanel + pill collapse/expand frames |
 | `NoteStore.swift` | `ObservableObject`: file listing, load/save, debounced autosave, folders, search index, pinning |
 | `GitSync.swift` | Every git op via `Process` on `/usr/bin/git` |
 | `EditorView.swift` | All SwiftUI: theme tokens, NavBar chrome, screens, NSTextView markdown editor |
 | `OnboardingView.swift` | First-run walkthrough + reusable git-setup guide |
+| `MCPServer.swift` | `--mcp`: hand-rolled JSON-RPC over stdio; every tool goes through `NoteStore`/`GitSync` |
 
 ## Invariants — do not break
 
@@ -41,6 +46,10 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
 - **Notes stay plain Markdown** in `~/Documents/GitPad/`. The editor shows ☐/☑ glyphs;
   `NoteStore.to/fromMarkdown` converts to/from `- [ ]` on disk. No proprietary format,
   no frontmatter, no sidecar index files.
+- **`--mcp` is read-only on git** (`log`/`show`) and only ever creates notes or appends to
+  today — a second process committing would race the GUI's sync. `--allow-sync` is the one
+  opt-in exception. Writes to today's note hand off to the running app over `gitpad://`
+  rather than fighting its debounced autosave.
 - **Sync never blocks writing** and never shows a merge UI — clean merge first, then
   conflict copies + `-X ours`. Keep it that way.
 - **Keyboard shortcuts live in the main-menu "Note" submenu** (`GitPadApp.swift`), so they

@@ -3,6 +3,17 @@
 All notable changes to GitPad. Dates are release dates; format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Features
+
+- **GitPad is an MCP server.** `GitPad --mcp` speaks JSON-RPC over stdio, so Claude
+  (or any MCP client) can list, read, search, create notes, append to today, read
+  daily notes, collect open to-dos, and see a note's git history. Hand-rolled — still
+  zero dependencies — and every tool goes through `NoteStore`, so search folding and
+  daily-note naming match the app exactly. Git stays read-only unless you pass
+  `--allow-sync`; `--exclude <folder>` keeps folders out of it entirely. (#25)
+
 ## [0.9.3] — 2026-07-31
 
 Undo you can trust, a selection bar that actually toggles, and ⌘K everywhere.

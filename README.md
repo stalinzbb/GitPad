@@ -79,19 +79,71 @@ key, missing repo, HTTPS login) and offers the fix — including a one-click swi
 HTTPS via the `gh` CLI. Adding a second Mac and resolving conflicts are covered in
 [SYNCING.md](SYNCING.md).
 
+## Connect your AI
+
+GitPad is its own [MCP](https://modelcontextprotocol.io) server — `GitPad --mcp` speaks
+the protocol over stdio, so Claude can read, search and add to your notes. No Node, no
+npm, no second app to install.
+
+Claude Code:
+
+```bash
+claude mcp add gitpad -- /Applications/GitPad.app/Contents/MacOS/GitPad --mcp
+```
+
+Claude Desktop — `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gitpad": {
+      "command": "/Applications/GitPad.app/Contents/MacOS/GitPad",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+(That's a path, so it breaks if you move the app — re-add it if you do.)
+
+Then: *"what's still open in my notes?"*, *"add 'renew the domain' to today"*,
+*"who edited Groceries last?"*
+
+| Tool | What it does |
+|------|--------------|
+| `list_notes`, `read_note`, `search_notes` | Browse and read; search uses the app's own matching |
+| `read_daily`, `list_open_todos` | Today (or a date range), and every unchecked `- [ ]` |
+| `create_note`, `append_daily` | The only two tools that write |
+| `note_history` | Git log for one note: who, when, which Mac |
+
+**The write contract.** Those two tools create notes and add lines; nothing here edits or
+deletes an existing note. Git is read-only — the server never commits or pushes, so it
+can't race the app's sync (`--allow-sync` adds a `sync_notes` tool if you want it).
+`append_daily` hands the text to the running app when there is one, so it can't clobber
+what you're typing; otherwise it writes the file directly and the app picks it up on its
+next refresh.
+
+**Keeping folders private.** Repeat `--exclude <folder>` (or set
+`GITPAD_MCP_EXCLUDE=Journal,Work`) and those folders never leave the process — not in
+listings, not in search, not readable by path.
+
+No MCP client? Your notes are a git repo: point any AI that can read a GitHub repo at it
+and you get the same content with zero setup.
+
 ## Architecture
 
-Seven files, no third-party dependencies:
+Eight files, no third-party dependencies:
 
 | File | Role |
 |------|------|
-| `main.swift` | Entry point; also a `--sync <dir>` CLI mode used by tests |
+| `main.swift` | Entry point; also `--sync <dir>` and `--mcp` CLI modes |
 | `GitPadApp.swift` | AppDelegate: status item, main-menu shortcuts, global hotkey, sync scheduling |
 | `PanelWindow.swift` | The floating NSPanel + pill frame logic |
 | `NoteStore.swift` | File listing, load/save, debounced autosave, trash-delete, search index |
 | `GitSync.swift` | All git operations via `Process` on `/usr/bin/git` |
 | `EditorView.swift` | SwiftUI chrome + NSTextView editor with markdown styling |
 | `OnboardingView.swift` | First-run walkthrough + the reusable git-setup guide |
+| `MCPServer.swift` | `--mcp`: JSON-RPC over stdio, hand-rolled, reusing `NoteStore` |
 
 Storage is the filesystem; the sync "backend" is whatever git remote you point it
 at. See [SECURITY.md](SECURITY.md) for the threat model and [ROADMAP.md](ROADMAP.md)
@@ -110,7 +162,7 @@ plain Markdown files.
 
 ## Contributing
 
-- **Build:** `./build.sh`. **Test:** `./test_gitsync.sh` (drives the real binary through a bare remote + conflict + unrelated-histories scenarios).
+- **Build:** `./build.sh`. **Test:** `./test_gitsync.sh` (drives the real binary through a bare remote + conflict + unrelated-histories scenarios) and `./test_mcp.sh` (drives `--mcp` over stdio).
 - **Code style — "the ladder":** reuse what's already here before reaching for the standard library; the standard library before new code; new code before a new dependency (there are none, keep it that way). Shortest change that actually works wins.
 - Keep git operations shelled out to `/usr/bin/git` with **fixed argument arrays** — never string-interpolated commands.
 

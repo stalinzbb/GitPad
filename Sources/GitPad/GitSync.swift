@@ -4,7 +4,7 @@ enum GitSync {
     /// Runs a subprocess with a FIXED argument array — never a shell string.
     /// SECURITY INVARIANT: no user input is ever interpolated into a shell;
     /// args go straight to execve, so note titles / remote URLs can't inject.
-    private static func exec(_ exe: String, _ args: [String], cwd: URL? = nil) -> (status: Int32, out: String) {
+    static func exec(_ exe: String, _ args: [String], cwd: URL? = nil) -> (status: Int32, out: String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = args

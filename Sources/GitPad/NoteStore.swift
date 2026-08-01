@@ -344,8 +344,14 @@ final class NoteStore: ObservableObject {
 
     // MARK: pinning
 
-    private func rel(_ url: URL) -> String {
-        url.path.hasPrefix(dir.path + "/") ? String(url.path.dropFirst(dir.path.count + 1)) : url.lastPathComponent
+    /// Path relative to the notes folder — the pin key, and the path MCP clients speak.
+    /// Symlinks are resolved on both sides: FileManager hands back resolved URLs
+    /// (`/var/…` → `/private/var/…`), so a raw prefix test misses whenever `dir` itself
+    /// sits under a symlink — a `GITPAD_DIR` pointed at /tmp, say.
+    func rel(_ url: URL) -> String {
+        let root = dir.resolvingSymlinksInPath().path + "/"
+        let path = url.resolvingSymlinksInPath().path
+        return path.hasPrefix(root) ? String(path.dropFirst(root.count)) : url.lastPathComponent
     }
 
     func isPinned(_ url: URL) -> Bool { pinned.contains(rel(url)) }
