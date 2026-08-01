@@ -118,10 +118,7 @@ struct UndoDeleteBanner: View {
                     .font(.callout.weight(.medium))
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .floatingCard()
             .padding(.horizontal, 12).padding(.bottom, 12)
         }
         .task(id: store.lastDeleted?.original) { // restarts the timer for each new delete
@@ -225,7 +222,7 @@ struct CommandPalette: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.opacity(0.25)
+            Color.black.opacity(Alpha.scrim)
                 .onTapGesture { store.paletteOpen = false }
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
@@ -237,13 +234,10 @@ struct CommandPalette: View {
                         .onExitCommand { store.paletteOpen = false } // beats PanelWindow.cancelOperation
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
-                Divider().opacity(0.4)
+                SoftDivider()
                 list
             }
-            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .floatingCard()
             .padding(.horizontal, 12).padding(.top, 44)
         }
         .onAppear {
@@ -299,7 +293,7 @@ struct CommandPalette: View {
             } else if i > 0 {
                 // an explicit hairline: Divider at 0.4 all but vanished on the material.
                 // -6 cancels the list's own inset so it runs edge to edge of the card.
-                Rectangle().fill(Color.primary.opacity(0.14))
+                Rectangle().fill(Color.primary.opacity(Alpha.cardDivider))
                     .frame(height: 1)
                     .padding(.horizontal, -6).padding(.vertical, 8)
             }
@@ -309,7 +303,7 @@ struct CommandPalette: View {
     private func row(_ item: Item, _ i: Int) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol(item))
-                .font(.system(size: 13, weight: .medium)) // same glyph weight as the chrome
+                .font(Fonts.chromeGlyph) // same glyph weight as the chrome
                 .frame(width: 18)
                 .foregroundStyle(.secondary)
             Text(label(item)).font(.callout).lineLimit(1)
@@ -414,9 +408,7 @@ struct NavCenter: View {
     var body: some View {
         VStack(spacing: 1) {
             HStack(spacing: 5) {
-                if showSyncDot {
-                    Circle().fill(syncColor(store.syncStatus)).frame(width: 6, height: 6)
-                }
+                if showSyncDot { SyncDot(status: store.syncStatus) }
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
             }
             if let subtitle {
@@ -441,7 +433,7 @@ struct PillView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
+            SyncDot(status: store.syncStatus)
             Text(store.selected.map { store.title(for: $0) } ?? "GitPad")
                 .font(.footnote.weight(.medium)).lineLimit(1)
             Spacer(minLength: 0)
@@ -530,7 +522,7 @@ struct CaptureView: View {
     /// The header is deliberately untouched: nothing moved out of it, it stays 42pt.
     private var bottomBar: some View {
         VStack(spacing: 0) {
-            Divider().opacity(0.4)
+            SoftDivider()
             HStack(spacing: 2) {
                 Text("\(wordCount) words")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -546,8 +538,7 @@ struct CaptureView: View {
                         }
                     } label: {
                         Image(systemName: "folder")
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: ChromeIcon.side, height: ChromeIcon.side)
+                            .iconSlot()
                             .contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden)
@@ -710,7 +701,7 @@ struct SettingsView: View {
                     }
                     LabeledContent("Status") {
                         HStack(spacing: 8) {
-                            Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
+                            SyncDot(status: store.syncStatus)
                             Group {
                                 Text(store.syncStatus.label)
                                 if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
@@ -1165,7 +1156,7 @@ struct LibraryView: View {
             .background(Color.primary.opacity(0.06),
                         in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8) // breathe below the chrome bar
-            Divider().opacity(0.4)
+            SoftDivider()
 
             HStack(spacing: 0) {
                 sourceRail.disabled(searching) // browsing is paused while searching everything
@@ -1185,9 +1176,7 @@ struct LibraryView: View {
                     sourceRow(.daily)
                     sourceRow(.inbox)
                     if !folders.isEmpty {
-                        Text("Folders".uppercased()) // matches the note-list section headers
-                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                            .tracking(0.6)
+                        SectionLabel(text: "Folders") // matches the note-list section headers
                             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
                         ForEach(folders, id: \.self) { f in
                             FolderRailRow(name: f, count: count(.folder(f)),
@@ -1202,7 +1191,7 @@ struct LibraryView: View {
             }
             .background(LeanScrollbar())
 
-            Divider().opacity(0.4)
+            SoftDivider()
             if creatingFolder {
                 TextField("Folder name", text: $newFolderName)
                     .textFieldStyle(.plain)
@@ -1228,9 +1217,7 @@ struct LibraryView: View {
                         .font(.callout).lineLimit(1)
                         .frame(maxWidth: .infinity, minHeight: railSlot, alignment: .leading)
                         .padding(.horizontal, 10).padding(.vertical, 3)
-                        .background(newFolderHover ? Color.primary.opacity(0.05) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 6))
-                        .contentShape(Rectangle())
+                        .rowBackground(hovering: newFolderHover)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -1310,9 +1297,7 @@ struct LibraryView: View {
                                 NoteRow(store: store, url: url)
                             }
                         } header: {
-                            Text(name.uppercased())
-                                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                                .tracking(0.6)
+                            SectionLabel(text: name)
                         }
                     }
                 }
@@ -1411,10 +1396,7 @@ struct NoteRow: View {
             }
             Spacer(minLength: 4)
             if store.folder(of: url) == "Daily" {
-                Text("Daily")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.primary.opacity(0.06), in: Capsule())
+                Chip(text: "Daily", font: .caption2)
             }
             Menu {
                 Button("Open") { store.open(url) }
@@ -1430,7 +1412,7 @@ struct NoteRow: View {
                 Button("Delete", role: .destructive) { store.delete(url) }
             } label: {
                 Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
-                    .frame(width: ChromeIcon.side, height: ChromeIcon.side) // constant slot; no .fixedSize() remeasure
+                    .iconSlot() // constant slot; no .fixedSize() remeasure
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -1439,8 +1421,7 @@ struct NoteRow: View {
             .allowsHitTesting(hovering) // hidden ⋯ must not eat taps meant for the row
         }
         .padding(.vertical, 5).padding(.horizontal, 6)
-        .background(Color.primary.opacity(hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 6))
-        .contentShape(Rectangle())
+        .rowBackground(hovering: hovering)
         .onTapGesture { store.open(url) }
         .onHover { hovering = $0 }
         .animation(Motion.quick, value: hovering)

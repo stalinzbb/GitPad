@@ -324,22 +324,9 @@ struct SectionLabel: View {
     }
 }
 
-/// Icon + plain text field, no background — the caller supplies one, because the palette
-/// (on material) and the Library search (on the panel surface) deliberately differ.
-struct IconTextField<Trailing: View>: View {
-    let symbol: String
-    let prompt: String
-    @Binding var text: String
-    @ViewBuilder var trailing: () -> Trailing
-
-    var body: some View {
-        HStack(spacing: Space.m) {
-            Image(systemName: symbol).foregroundStyle(.secondary)
-            TextField(prompt, text: $text).textFieldStyle(.plain)
-            trailing()
-        }
-    }
-}
+// ponytail: no shared icon+field component. The palette and the Library search each need
+// their own .focused/.onSubmit/.onExitCommand, so wrapping them saves one HStack and costs
+// a generic. Two sites is not a pattern.
 
 /// A 5pt capsule knob and no track line. Drawing is the ONLY thing overridden — an
 /// earlier version also narrowed the scroller to 9pt, which pushed the knob into the
