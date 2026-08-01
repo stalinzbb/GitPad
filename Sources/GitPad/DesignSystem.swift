@@ -328,6 +328,70 @@ struct SectionLabel: View {
 // their own .focused/.onSubmit/.onExitCommand, so wrapping them saves one HStack and costs
 // a generic. Two sites is not a pattern.
 
+/// The house text field.
+///
+/// `.textFieldStyle(.roundedBorder)` draws a system control that answers to the window's
+/// forced appearance, not to the theme: a bright white well on Sepia, a near-black one on
+/// Nord, always fighting the surface it sits on. This is a plain field on the panel's own
+/// quiet fill, so it belongs to whichever theme is showing. The focus ring is the theme
+/// accent, and `strokeBorder` draws inward — a focused field never changes size.
+struct FieldStyle: ViewModifier {
+    var focused: Bool = false
+    @Environment(\.theme) private var theme
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .padding(.horizontal, Space.m).padding(.vertical, Space.s)
+            .background(Color.quietFill, in: shape)
+            .overlay(shape.strokeBorder(focused ? theme.accentSwift.opacity(0.8) : Color.cardStroke,
+                                        lineWidth: focused ? 2 : 1))
+            .animation(Motion.quick, value: focused)
+    }
+}
+
+extension View {
+    func fieldStyle(focused: Bool = false) -> some View { modifier(FieldStyle(focused: focused)) }
+}
+
+/// One theme swatch: surface disc, accent pip, check when picked.
+///
+/// The ring is drawn with `strokeBorder` (inward) over a hard 26pt frame, so picking a
+/// theme changes colors only — never the swatch's size or shape. The earlier version let
+/// a `LabeledContent` trailing slot squeeze the row, which clipped the discs into
+/// different shapes at narrow panel widths.
+struct ThemeSwatch: View {
+    let theme: Theme
+    let selected: Bool
+    let action: () -> Void
+
+    static let side: CGFloat = 26
+
+    var body: some View {
+        Button(action: action) {
+            Circle().fill(theme.swatchBg)
+                .frame(width: Self.side, height: Self.side)
+                .overlay(Circle().fill(theme.accentSwift).frame(width: 11, height: 11))
+                .overlay(Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .opacity(selected ? 1 : 0))
+                .overlay(Circle().strokeBorder(
+                    Color.primary.opacity(selected ? 0.45 : Alpha.strokeStrong),
+                    lineWidth: selected ? 2 : 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .animation(Motion.quick, value: selected)
+        .help(theme.id)
+    }
+}
+
 /// A 5pt capsule knob and no track line. Drawing is the ONLY thing overridden — an
 /// earlier version also narrowed the scroller to 9pt, which pushed the knob into the
 /// panel's rounded mask (it read as cut off at the ends) and fought the overlay

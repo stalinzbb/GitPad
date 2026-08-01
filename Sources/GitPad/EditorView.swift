@@ -517,9 +517,10 @@ struct CaptureView: View {
         // so they work from every screen — not just here.
     }
 
-    /// Pin / move / delete without a round-trip to the Library's ⋯ menu, plus a live word
-    /// count. Editor screen only — the Library already has all three on every row.
-    /// The header is deliberately untouched: nothing moved out of it, it stays 42pt.
+    /// A live word count and pin — the two things you want *while writing*. Move and delete
+    /// deliberately don't live here: they're filing, not writing, and a destructive control
+    /// one slip away from the text is the wrong trade. Both stay on every Library row's ⋯
+    /// menu, plus ⌘⌫ and the ⌘K palette. The header stays 42pt.
     private var bottomBar: some View {
         VStack(spacing: 0) {
             SoftDivider()
@@ -531,20 +532,6 @@ struct CaptureView: View {
                 if let sel = store.selected {
                     ChromeIcon(symbol: store.isPinned(sel) ? "pin.fill" : "pin",
                                help: store.isPinned(sel) ? "Unpin" : "Pin") { store.togglePin(sel) }
-                    Menu {
-                        Button("Notes") { store.move(sel, to: nil) }
-                        ForEach(store.folders, id: \.self) { f in
-                            Button(f) { store.move(sel, to: f) }
-                        }
-                    } label: {
-                        Image(systemName: "folder")
-                            .iconSlot()
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                    .foregroundStyle(.secondary)
-                    .help("Move to folder")
-                    ChromeIcon(symbol: "trash", help: "Delete (⌘⌫)") { store.deleteCurrent() }
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 2)
@@ -580,6 +567,21 @@ struct SettingsView: View {
     @State private var remote = ""
     @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
+    @FocusState private var remoteFocused: Bool
+
+    /// Save is live only when there's something to save — an enabled button that does
+    /// nothing is worse feedback than a disabled one.
+    private var remoteChanged: Bool {
+        let t = remote.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t != shownRemote
+    }
+
+    private func pendingLabel(_ ab: (ahead: Int, behind: Int)) -> String {
+        var parts: [String] = []
+        if ab.ahead > 0 { parts.append("\(ab.ahead) to push") }
+        if ab.behind > 0 { parts.append("\(ab.behind) to pull") }
+        return parts.joined(separator: " · ")
+    }
 
     /// Local state, deliberately NOT new `Screen` cases: those would multiply the
     /// `goBack()` / settingsReturn branches for nothing. Esc and ⌘, keep working as-is;
@@ -654,30 +656,22 @@ struct SettingsView: View {
                 }
 
                 case .appearance:
+                // Full-width row, not a LabeledContent trailing slot: that slot compresses
+                // on a narrow panel and clipped the swatches into different shapes.
                 Section {
-                    LabeledContent("Theme") {
-                        HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: Space.m) {
+                        HStack(spacing: Space.xl) {
                             ForEach(Theme.all) { t in
-                                Button { themeID = t.id } label: {
-                                    Circle().fill(t.swatchBg)
-                                        .frame(width: 26, height: 26)
-                                        .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
-                                        .overlay(themeID == t.id
-                                            ? Image(systemName: "checkmark")
-                                                .font(.system(size: 8, weight: .bold))
-                                                .foregroundStyle(.white)
-                                            : nil)
-                                        .overlay(Circle().strokeBorder(
-                                            Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
-                                            lineWidth: themeID == t.id ? 2 : 1))
-                                        .animation(Motion.quick, value: themeID)
-                                }
-                                .buttonStyle(.plain)
-                                .help(t.id)
+                                ThemeSwatch(theme: t, selected: themeID == t.id) { themeID = t.id }
                             }
                         }
-                        .padding(.vertical, 2)
+                        Text(themeID) // say which one is on; the swatches alone are a guess
+                            .font(.caption).foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, Space.xxs)
+                } header: {
+                    Text("Theme")
                 } footer: {
                     Text("Changes apply immediately — there's no Save button.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -690,44 +684,58 @@ struct SettingsView: View {
                 ShortcutsList()
 
                 case .sync:
+                // One thing per row, in the order you do them: point it at a repo, then
+                // watch it work. The field is the house style — .roundedBorder renders a
+                // system-appearance well that ignores the theme entirely.
                 Section {
-                    HStack {
+                    VStack(alignment: .leading, spacing: Space.m) {
                         TextField("git@github.com:you/notes.git", text: $remote)
-                            .textFieldStyle(.roundedBorder)
                             .font(.caption.monospaced())
+                            .focused($remoteFocused)
+                            .fieldStyle(focused: remoteFocused)
                             .onSubmit { saveRemote() }
-                        Button("Save") { saveRemote() }
-                            .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    LabeledContent("Status") {
-                        HStack(spacing: 8) {
-                            SyncDot(status: store.syncStatus)
-                            Group {
-                                Text(store.syncStatus.label)
-                                if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
-                                    Text("↑\(ab.ahead) ↓\(ab.behind)")
-                                }
-                            }
-                            .font(.callout).foregroundStyle(.secondary)
-                            Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
-                                .disabled(store.syncing)
+                        HStack(alignment: .firstTextBaseline, spacing: Space.m) {
+                            Text("SSH uses this Mac's existing keys — nothing to log in to. HTTPS works too.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Button("Save") { saveRemote() }
+                                .disabled(!remoteChanged)
                         }
                     }
-                    if store.syncStatus == .offline {
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            FixSyncPanel(store: store)
-                        }
-                        .listRowBackground(Color.statusWarn.opacity(Alpha.iconHover))
-                    }
+                    .padding(.vertical, Space.xxs)
                 } header: {
                     HStack {
-                        Text("Sync")
+                        Text("Repository")
                         Spacer()
                         Button("Setup guide") { store.screen = .gitSetup }
                             .buttonStyle(.plain)
                             .foregroundStyle(.tint)
+                    }
+                }
+                Section("Status") {
+                    HStack(spacing: Space.l) {
+                        SyncDot(status: store.syncStatus)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(store.syncStatus.label).font(.callout)
+                            if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
+                                // spell it out: "↑2 ↓1" is a git idiom, not plain language
+                                Text(pendingLabel(ab))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
+                            .disabled(store.syncing)
+                    }
+                    .padding(.vertical, Space.xxs)
+                    if store.syncStatus == .offline {
+                        HStack(alignment: .top, spacing: Space.m) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Color.statusWarn)
+                            FixSyncPanel(store: store)
+                        }
+                        .listRowBackground(Color.statusWarn.opacity(Alpha.iconHover))
                     }
                 }
                 if !store.conflicts.isEmpty {
@@ -988,7 +996,7 @@ struct HotkeyRecorder: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Shortcut")
+                Text("Summon GitPad")
                 Spacer()
                 Button { recording ? stop() : start() } label: {
                     Text(recording ? "Press keys…" : display)
@@ -1004,7 +1012,7 @@ struct HotkeyRecorder: View {
             }
             Text(warning ?? (recording
                              ? "Esc cancels."
-                             : "Press \(display) from any app to summon GitPad — click to change."))
+                             : "Press this from any app, even when GitPad is hidden — click to change."))
                 .font(.caption)
                 .foregroundStyle(warning == nil ? .secondary : Color.orange)
         }

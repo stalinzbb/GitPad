@@ -4,6 +4,7 @@ struct OnboardingView: View {
     @ObservedObject var store: NoteStore
     @State private var step = 0
     @State private var remote = ""
+    @FocusState private var remoteFocused: Bool
     @AppStorage("onboarded") private var onboarded = false
 
     private var pages: [(symbol: String, title: String, body: String)] { [
@@ -27,9 +28,10 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             if step == 2 {
-                HStack(spacing: 6) {
+                HStack(spacing: Space.s) {
                     TextField("git@github.com:you/notes.git", text: $remote)
-                        .textFieldStyle(.roundedBorder)
+                        .focused($remoteFocused)
+                        .fieldStyle(focused: remoteFocused)
                         .frame(width: 240)
                     Button("Test") { testConnection() }
                         .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -101,6 +103,7 @@ struct GitSetupView: View {
     @ObservedObject var store: NoteStore
     @Environment(\.theme) private var theme
     @State private var remote = ""
+    @FocusState private var remoteFocused: Bool
     @State private var result: String?
     @State private var working = false
     @State private var ghReady = false
@@ -135,7 +138,8 @@ struct GitSetupView: View {
                 step(2, "Paste the repo URL",
                      "SSH (git@github.com:you/notes.git) uses this Mac's keys — nothing to log into. HTTPS works too if you use the gh CLI or a credential helper.")
                 TextField("git@github.com:you/notes.git", text: $remote)
-                    .textFieldStyle(.roundedBorder)
+                    .focused($remoteFocused)
+                    .fieldStyle(focused: remoteFocused)
                     .padding(.leading, Space.gutter + Space.l)
 
                 step(3, "Save & Sync",
