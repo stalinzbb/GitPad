@@ -587,7 +587,7 @@ struct SettingsView: View {
     /// `goBack()` / settingsReturn branches for nothing. Esc and ⌘, keep working as-is;
     /// the tab just resets to General after a Setup-guide round trip.
     enum Tab: String, CaseIterable {
-        case general = "General", appearance = "Appearance", shortcuts = "Shortcuts", sync = "Sync"
+        case general = "General", appearance = "Appearance", shortcuts = "Hotkeys", sync = "Sync"
     }
     @State private var tab: Tab = .general
 
