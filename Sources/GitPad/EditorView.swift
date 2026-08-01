@@ -443,8 +443,8 @@ struct PillView: View {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.caption2).foregroundStyle(.secondary)
                 .frame(width: 22, height: 22)
-                .background(expandHover ? Color.primary.opacity(0.08) : .clear,
-                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .background(expandHover ? Color.iconHoverBg : .clear,
+                            in: RoundedRectangle(cornerRadius: Radius.chip, style: .continuous))
                 .contentShape(Rectangle())
                 .onHover { expandHover = $0 }
                 .animation(Motion.quick, value: expandHover)
@@ -635,7 +635,7 @@ struct SettingsView: View {
                                 Divider().frame(height: 14)
                                 stepper("plus") { editorFontSize = min(20, editorFontSize + 1) }
                             }
-                            .background(Color.primary.opacity(0.06), in: Capsule())
+                            .background(Color.quietFill, in: Capsule())
                         }
                     }
                     Text("The quick brown fox jumps over the lazy dog.")
@@ -719,7 +719,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.orange)
                             FixSyncPanel(store: store)
                         }
-                        .listRowBackground(Color.orange.opacity(0.08))
+                        .listRowBackground(Color.statusWarn.opacity(Alpha.iconHover))
                     }
                 } header: {
                     HStack {
@@ -936,7 +936,8 @@ struct ConflictView: View {
             }
             .frame(minHeight: 120)
             .background(LeanScrollbar())
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+            .background(Color.primary.opacity(Alpha.inset),
+                        in: RoundedRectangle(cornerRadius: Radius.control))
         }
     }
 }
@@ -993,10 +994,10 @@ struct HotkeyRecorder: View {
                     Text(recording ? "Press keys…" : display)
                         .font(.callout.weight(.medium))
                         .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Color.primary.opacity(recording ? 0.12 : 0.06),
-                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.12)))
+                        .background(Color.primary.opacity(recording ? Alpha.strokeStrong : Alpha.hover),
+                                    in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(Alpha.strokeStrong)))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1153,8 +1154,8 @@ struct LibraryView: View {
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(Color.primary.opacity(0.06),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color.quietFill,
+                        in: RoundedRectangle(cornerRadius: Radius.field, style: .continuous))
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8) // breathe below the chrome bar
             SoftDivider()
 

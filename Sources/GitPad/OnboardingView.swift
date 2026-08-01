@@ -38,7 +38,7 @@ struct OnboardingView: View {
                 if let result = testResult {
                     Text(result)
                         .font(.caption)
-                        .foregroundStyle(result.hasPrefix("✓") ? Color.green : result == "…" ? Color.secondary : Color.red)
+                        .foregroundStyle(result.hasPrefix("✓") ? Color.statusOK : result == "…" ? Color.secondary : Color.statusErr)
                 }
             }
             Spacer()
@@ -120,32 +120,32 @@ struct GitSetupView: View {
                     Button { createRepo() } label: {
                         Label("Create a private repo for me", systemImage: "wand.and.stars")
                     }
-                    .padding(.leading, 30)
+                    .padding(.leading, Space.gutter + Space.l)
                     .disabled(working)
                     Text("Prefer your own? Paste an SSH or HTTPS URL below instead.")
-                        .font(.caption2).foregroundStyle(.tertiary).padding(.leading, 30)
+                        .font(.caption2).foregroundStyle(.tertiary).padding(.leading, Space.gutter + Space.l)
                 } else {
                     step(1, "Create a private repository",
                          "Any git host works. On GitHub: New repository → Private.")
                     Link("Open github.com/new ↗", destination: URL(string: "https://github.com/new")!)
                         .font(.callout)
-                        .padding(.leading, 30)
+                        .padding(.leading, Space.gutter + Space.l)
                 }
 
                 step(2, "Paste the repo URL",
                      "SSH (git@github.com:you/notes.git) uses this Mac's keys — nothing to log into. HTTPS works too if you use the gh CLI or a credential helper.")
                 TextField("git@github.com:you/notes.git", text: $remote)
                     .textFieldStyle(.roundedBorder)
-                    .padding(.leading, 30)
+                    .padding(.leading, Space.gutter + Space.l)
 
                 step(3, "Save & Sync",
                      "GitPad checks the connection, syncs once, then keeps syncing on every save, every 5 minutes, and on wake.")
             }
-            .padding(20)
+            .padding(Space.gutter)
             Spacer()
             if let r = result {
                 Text(r).font(.caption)
-                    .foregroundStyle(r.hasPrefix("✓") ? Color.green : Color.red)
+                    .foregroundStyle(r.hasPrefix("✓") ? Color.statusOK : Color.statusErr)
                     .padding(.bottom, 6)
             }
             Button(working ? "Working…" : "Save & Sync") { saveAndSync() }
