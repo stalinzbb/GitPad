@@ -57,6 +57,10 @@ gotchas, and things that would surprise a contributor._
   deleting one is likewise local-only). It reaches the remote once its first note saves.
   Accepted behavior — the alternative (`.gitkeep` placeholders) would put sidecar files
   in the notes repo.
+- **`unzip` silently breaks a signed bundle.** It drops the extended attributes the signature seals over, so a perfectly good release then fails `codesign --verify` with "a sealed resource is missing or invalid" — a message that reads like tampering. `Updater` expands with `/usr/bin/ditto -x -k`, which preserves them. Same trap applies to any by-hand check of a release zip: extract with `ditto` or you'll be debugging a signature that was never broken.
+- **`GET /releases/latest` 404s for this repo.** Every GitPad release so far is marked *pre-release*, and that endpoint only ever returns a full release. `Updater` lists `?per_page=5` and takes the first non-draft entry, which works either way. Tags are v-prefixed (`v0.9.3`), assets are not (`GitPad-0.9.3.zip`) — the updater strips the `v` before matching.
+- **Replacing the running app** uses move-aside (rename the live bundle out of the way, move the new one in), not `replaceItemAt`. Renaming a running bundle is safe — the executable keeps running from the renamed inode — and both renames are same-volume, hence atomic. `Hotkey.stop()` must run before the replacement launches, or the new instance can't register ⌥Space while this one still holds it.
+- **The staged-update directory is user-writable**, so `Updater.verifiedStagedApp()` re-runs the *full* signature chain at the moment of use rather than trusting the check done at download time.
 
 ## Verify
 

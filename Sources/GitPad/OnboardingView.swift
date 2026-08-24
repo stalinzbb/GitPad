@@ -4,6 +4,7 @@ struct OnboardingView: View {
     @ObservedObject var store: NoteStore
     @State private var step = 0
     @State private var remote = ""
+    @FocusState private var remoteFocused: Bool
     @AppStorage("onboarded") private var onboarded = false
 
     private var pages: [(symbol: String, title: String, body: String)] { [
@@ -27,9 +28,10 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             if step == 2 {
-                HStack(spacing: 6) {
+                HStack(spacing: Space.s) {
                     TextField("git@github.com:you/notes.git", text: $remote)
-                        .textFieldStyle(.roundedBorder)
+                        .focused($remoteFocused)
+                        .fieldStyle(focused: remoteFocused)
                         .frame(width: 240)
                     Button("Test") { testConnection() }
                         .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -38,7 +40,7 @@ struct OnboardingView: View {
                 if let result = testResult {
                     Text(result)
                         .font(.caption)
-                        .foregroundStyle(result.hasPrefix("✓") ? Color.green : result == "…" ? Color.secondary : Color.red)
+                        .foregroundStyle(result.hasPrefix("✓") ? Color.statusOK : result == "…" ? Color.secondary : Color.statusErr)
                 }
             }
             Spacer()
@@ -99,7 +101,9 @@ struct OnboardingView: View {
 /// Step-by-step git sync onboarding, reachable any time from Settings.
 struct GitSetupView: View {
     @ObservedObject var store: NoteStore
+    @Environment(\.theme) private var theme
     @State private var remote = ""
+    @FocusState private var remoteFocused: Bool
     @State private var result: String?
     @State private var working = false
     @State private var ghReady = false
@@ -119,32 +123,33 @@ struct GitSetupView: View {
                     Button { createRepo() } label: {
                         Label("Create a private repo for me", systemImage: "wand.and.stars")
                     }
-                    .padding(.leading, 30)
+                    .padding(.leading, Space.gutter + Space.l)
                     .disabled(working)
                     Text("Prefer your own? Paste an SSH or HTTPS URL below instead.")
-                        .font(.caption2).foregroundStyle(.tertiary).padding(.leading, 30)
+                        .font(.caption2).foregroundStyle(.tertiary).padding(.leading, Space.gutter + Space.l)
                 } else {
                     step(1, "Create a private repository",
                          "Any git host works. On GitHub: New repository → Private.")
                     Link("Open github.com/new ↗", destination: URL(string: "https://github.com/new")!)
                         .font(.callout)
-                        .padding(.leading, 30)
+                        .padding(.leading, Space.gutter + Space.l)
                 }
 
                 step(2, "Paste the repo URL",
                      "SSH (git@github.com:you/notes.git) uses this Mac's keys — nothing to log into. HTTPS works too if you use the gh CLI or a credential helper.")
                 TextField("git@github.com:you/notes.git", text: $remote)
-                    .textFieldStyle(.roundedBorder)
-                    .padding(.leading, 30)
+                    .focused($remoteFocused)
+                    .fieldStyle(focused: remoteFocused)
+                    .padding(.leading, Space.gutter + Space.l)
 
                 step(3, "Save & Sync",
                      "GitPad checks the connection, syncs once, then keeps syncing on every save, every 5 minutes, and on wake.")
             }
-            .padding(20)
+            .padding(Space.gutter)
             Spacer()
             if let r = result {
                 Text(r).font(.caption)
-                    .foregroundStyle(r.hasPrefix("✓") ? Color.green : Color.red)
+                    .foregroundStyle(r.hasPrefix("✓") ? Color.statusOK : Color.statusErr)
                     .padding(.bottom, 6)
             }
             Button(working ? "Working…" : "Save & Sync") { saveAndSync() }
@@ -170,7 +175,7 @@ struct GitSetupView: View {
             Text("\(n)")
                 .font(.caption.weight(.bold))
                 .frame(width: 20, height: 20)
-                .background(Color.accentColor.opacity(0.15), in: Circle())
+                .background(theme.selection, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.callout.weight(.medium))
                 Text(detail).font(.caption).foregroundStyle(.secondary)

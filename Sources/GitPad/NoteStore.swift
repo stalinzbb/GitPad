@@ -105,6 +105,9 @@ final class NoteStore: ObservableObject {
     var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
     @Published var syncing = false
+    /// Set by the AppDelegate's release check and by the Settings button. Drives the
+    /// status-menu item and the Settings row; never pops anything over the editor.
+    @Published var update: Updater.State = .none
     private var loading = false
     private var saveWork: DispatchWorkItem?
     private var titleCache: [URL: (title: String, mtime: Date)] = [:]
@@ -590,6 +593,13 @@ final class NoteStore: ObservableObject {
         let work = DispatchWorkItem { [weak self] in self?.saveNow() }
         saveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    /// Write a still-debounced edit right now. `saveWork` is private, so a caller about to
+    /// end the process (quit, or the updater's relaunch) has no other way to ask whether
+    /// typing is sitting in the 1s window — and that window used to be dropped on the floor.
+    func flushPendingSave() {
+        if saveWork != nil { saveNow() }
     }
 
     func saveNow() {

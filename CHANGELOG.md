@@ -3,6 +3,69 @@
 All notable changes to GitPad. Dates are release dates; format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+## [0.10.0] — 2026-08-01
+
+GitPad can update itself now — and every theme finally reaches every control.
+
+### Features
+
+- **Check for updates.** GitPad now notices when a newer version is published: a
+  "Update to X.Y.Z…" item appears at the top of the menu-bar menu, and Settings →
+  General → Updates shows the running version, a manual Check button, and an
+  opt-out. The check is an unauthenticated `GET` of the public releases list about
+  once a day, sends nothing about you, and can be turned off entirely. (#40)
+- **One-click update.** "Update" downloads the release, verifies it, swaps the app
+  in place and relaunches — no Sparkle, no helper process, no shell. It refuses
+  before downloading anything on a Homebrew install (brew keeps the job) or a dev
+  build, and refuses after downloading unless the bytes match GitHub's published
+  SHA-256 *and* the bundle is Developer-ID-signed by us *and* Apple notarized it.
+  Any failure leaves the running app untouched. (#45)
+- **Optional auto-update**, off by default. With it on, a new release is downloaded
+  and verified in the background and installed when you next quit — or immediately
+  with "Restart to Update". Nothing ever pops up over the editor, and nothing
+  installs while you're writing. The staged bundle is verified again at the instant
+  it's installed, not just when it was downloaded, and is discarded rather than
+  installed if anything about it stopped adding up.
+
+### Design
+
+- **Themes now reach every control.** Selected rows — the source rail, folder
+  rows, the ⌘K palette — and the setup step badge were drawn with the *system*
+  accent, which `.tint()` never touches, so Nord, Dracula and Sepia showed
+  system-blue selection on an otherwise fully themed panel. They follow the
+  theme now. (PR #47)
+- **Text fields stop fighting the theme.** The rounded-border style is a system
+  control that answers to the window's appearance, not the theme: a white well
+  on Sepia, near-black on Nord. Settings, the setup guide and onboarding now use
+  one field style built on the panel's own surface, with a theme-accent focus
+  ring. (PR #47)
+- **Theme swatches are uniform.** They sat in a slot that compressed on a narrow
+  panel and clipped them into different shapes; they're a fixed-size row now,
+  and the current theme is named below them.
+- **Sync settings, reordered.** One thing per row: Repository (the URL, what it
+  accepts, and a Save that's live only when there's something to save), then
+  Status — which now says "2 to push · 1 to pull" instead of `↑2 ↓1`.
+- **Settings → Shortcuts is now Hotkeys**, and the global hotkey is labelled for
+  what it does: "Summon GitPad".
+- Under it: one design-token file (`DesignSystem.swift`) that the SwiftUI chrome
+  and the AppKit editor/panel both read, so radii, spacing, opacities and the
+  pill's motion curve can no longer drift apart between the two.
+
+### Changed
+
+- **The editor's bottom bar keeps the word count and Pin.** Move-to-folder and
+  delete are gone from it — those are filing, not writing, and a destructive
+  control one slip from the text is the wrong trade. Both are still on every
+  Library row's ⋯ menu, on ⌘⌫, and in the ⌘K palette. (Reverses part of #20.)
+
+### Bug fixes
+
+- **Quitting mid-typing no longer drops the last second.** Quit inside the 1s
+  autosave debounce and that text used to be lost; every quit path now flushes
+  first. Found while making the updater's relaunch safe.
+
 ## [0.9.3] — 2026-07-31
 
 Undo you can trust, a selection bar that actually toggles, and ⌘K everywhere.

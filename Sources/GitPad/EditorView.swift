@@ -2,104 +2,6 @@ import SwiftUI
 import AppKit
 import Carbon.HIToolbox // kVK_Escape for the hotkey recorder
 
-// MARK: - Themes (token set consumed by the editor + chrome)
-//
-// Curated presets, not a base×color matrix (see GROWTH-style decision: real palettes
-// like Nord/Dracula are defined for ONE mode; the matrix would invent ugly combos and
-// double the tokens). Adding a theme is one row below — appearance/swatch/SwiftUI color
-// all derive from `base` + hex, so you only pick the 3 colors that actually differ.
-
-enum ThemeBase {
-    case system, light, dark
-    var appearance: NSAppearance.Name? {
-        switch self { case .system: return nil; case .light: return .aqua; case .dark: return .darkAqua }
-    }
-}
-
-struct Theme: Identifiable {
-    let id: String
-    let appearance: NSAppearance.Name?  // nil = follow system; drives every native control
-    let accent: NSColor                 // checkboxes, chips (and, wrapped, the SwiftUI tint)
-    let code: NSColor                   // inline code
-    private let tintHex: UInt?          // opaque panel surface. nil = System (follow the OS)
-
-    var accentSwift: Color { Color(nsColor: accent) }
-    /// The panel's own background. Text sits on THIS, never on the desktop — which is what
-    /// keeps the window readable over a white backdrop. System follows the OS window color,
-    /// so it adapts light/dark instead of having no surface at all.
-    var surface: Color { tintHex.map { Color(hex: $0) } ?? Color(nsColor: .windowBackgroundColor) }
-    var swatchBg: Color { surface }
-
-    /// The common case: a preset from hex colors + a light/dark base.
-    init(id: String, base: ThemeBase, accent: UInt, code: UInt, tint: UInt) {
-        self.id = id; self.appearance = base.appearance
-        self.accent = NSColor(hex: accent); self.code = NSColor(hex: code); self.tintHex = tint
-    }
-    /// System: dynamic accent that follows the OS, no tint wash.
-    private init(system id: String) {
-        self.id = id; self.appearance = nil
-        self.accent = .controlAccentColor; self.code = .systemPurple; self.tintHex = nil
-    }
-
-    static let all: [Theme] = [
-        Theme(system: "System"),
-        Theme(id: "Sepia",            base: .light, accent: 0xA87538, code: 0x996B33, tint: 0xF5E8CF),
-        Theme(id: "Nord",             base: .dark,  accent: 0x87BFD1, code: 0xA3BF8C, tint: 0x2E3340),
-        Theme(id: "Dracula",          base: .dark,  accent: 0xBD94FA, code: 0x4FE67A, tint: 0x292936),
-        Theme(id: "Solarized Light",  base: .light, accent: 0x268CD1, code: 0x859900, tint: 0xFCF5E3),
-    ]
-
-    static func named(_ id: String) -> Theme { all.first { $0.id == id } ?? all[0] }
-}
-
-extension Color {
-    init(hex: UInt) {
-        self.init(.sRGB, red: Double((hex >> 16) & 0xFF) / 255,
-                  green: Double((hex >> 8) & 0xFF) / 255, blue: Double(hex & 0xFF) / 255)
-    }
-}
-
-extension NSColor {
-    convenience init(hex: UInt) {
-        self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-                  green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
-    }
-}
-
-/// Central motion tokens. `reduce` is read at interaction time (no observer), and a
-/// nil animation means "instant" — so Reduce Motion falls out for free everywhere.
-enum Motion {
-    static var reduce: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    // screen: critically-damped reposition; quick: snappy hover; pop: momentum bounce.
-    static var screen: Animation? { reduce ? nil : .spring(response: 0.32, dampingFraction: 0.85) }
-    static var quick:  Animation? { reduce ? nil : .spring(response: 0.18, dampingFraction: 0.9) }
-    static var pop:    Animation? { reduce ? nil : .spring(response: 0.30, dampingFraction: 0.7) }
-    /// Mirrors `PanelWindow.applyPill`'s CA curve so SwiftUI chrome tracks the window frame.
-    static var pillFrame: Animation? {
-        reduce ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.22)
-    }
-}
-
-/// Contrast floor for the floating panel. The window blends `.behindWindow`, so without
-/// a real surface the text renders against whatever is on screen — unreadable over white,
-/// because `labelColor` follows the window's *appearance*, not the actual backdrop.
-/// One tunable: how much of the material shows through.
-enum PanelSurface {
-    static var reduceTransparency: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-    }
-    static var opacity: Double { reduceTransparency ? 1.0 : 0.92 }
-}
-
-/// Ambient sync-state color, shared by every NavBar dot + the pill.
-func syncColor(_ status: SyncStatus) -> Color {
-    switch status {
-    case .synced: return .green
-    case .offline: return .orange
-    default: return .secondary.opacity(0.4)
-    }
-}
-
 // MARK: - Root switcher
 
 struct EditorView: View {
@@ -132,9 +34,12 @@ struct EditorView: View {
         .animation(Motion.quick, value: store.lastDeleted?.original)
         .animation(Motion.quick, value: store.paletteOpen)
         .tint(theme.accentSwift) // buttons/toggles/sliders/selection take the theme accent
+        // The one reactive design value. `.tint` can't carry it: it never reaches
+        // `Color.accentColor`, which is why themed panels used to select in system blue.
+        .environment(\.theme, theme)
         .overlay( // hairline edge; material below dims itself when the window loses key
-            RoundedRectangle(cornerRadius: store.pill ? 20 : 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: store.pill ? Radius.pill : Radius.panel, style: .continuous)
+                .strokeBorder(Color.primary.opacity(Alpha.strokeFaint), lineWidth: 1)
                 // match applyPill's curve, or the hairline snaps to its new radius while
                 // the window is still growing
                 .animation(Motion.pillFrame, value: store.pill)
@@ -197,49 +102,6 @@ struct NavBar<L: View, C: View, R: View>: View {
     }
 }
 
-/// Every chrome control is this: one identical square container, one glyph size/weight,
-/// one hover background. Alignment then comes from the container geometry rather than
-/// from each SF Symbol's own optical center — which is why mixing a heavy glyph
-/// (square.and.pencil) with a thin one (xmark) used to read as misaligned.
-/// Pair it with symmetric glyphs; see `ChromeGlyph`.
-struct ChromeIcon: View {
-    let symbol: String
-    let help: String
-    var tint: Color? = nil // only the conflict badge deviates from the secondary chrome
-    let action: () -> Void
-    @State private var hovering = false
-
-    static let side: CGFloat = 28 // container; 2pt gaps → ~30pt pitch
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .symbolRenderingMode(.monochrome)
-                .frame(width: Self.side, height: Self.side)
-                .background(hovering ? Color.primary.opacity(0.08) : .clear,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(tint ?? Color.secondary)
-        .onHover { hovering = $0 }
-        .animation(Motion.quick, value: hovering)
-        .help(help)
-    }
-}
-
-/// The chrome glyph set — symmetric, matched optical weight, so the clusters balance.
-enum ChromeGlyph {
-    static let back     = "chevron.left"
-    static let library  = "square.grid.2x2"
-    static let newNote  = "plus"          // was square.and.pencil (heavy, juts top-right)
-    static let settings = "gearshape"
-    static let minimize = "minus"         // was a busy 4-arrow glyph
-    static let close    = "xmark"
-    static let conflict = "exclamationmark.triangle.fill"
-}
-
 /// "Note deleted — Undo", bottom-anchored, self-dismissing. The delete already went to
 /// the Trash; this just makes the slip one click to reverse instead of a Finder trip.
 struct UndoDeleteBanner: View {
@@ -256,10 +118,7 @@ struct UndoDeleteBanner: View {
                     .font(.callout.weight(.medium))
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .floatingCard()
             .padding(.horizontal, 12).padding(.bottom, 12)
         }
         .task(id: store.lastDeleted?.original) { // restarts the timer for each new delete
@@ -278,32 +137,6 @@ struct PaletteCommand {
     let symbol: String
     var keys: String = ""
     let run: () -> Void
-}
-
-/// A key combo you can actually read: the same chip the hotkey recorder uses, so the
-/// palette, the shortcuts table and Settings all render a binding identically.
-struct KeyChip: View {
-    let keys: String
-
-    var body: some View {
-        Text(keys)
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color.primary.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-    }
-}
-
-/// Section label, matching the Library's group headers.
-struct SectionLabel: View {
-    let text: String
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            .tracking(0.6)
-    }
 }
 
 /// ⌘K: one field over every command plus note search, floating above whatever screen
@@ -389,7 +222,7 @@ struct CommandPalette: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.opacity(0.25)
+            Color.black.opacity(Alpha.scrim)
                 .onTapGesture { store.paletteOpen = false }
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
@@ -401,13 +234,10 @@ struct CommandPalette: View {
                         .onExitCommand { store.paletteOpen = false } // beats PanelWindow.cancelOperation
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
-                Divider().opacity(0.4)
+                SoftDivider()
                 list
             }
-            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .floatingCard()
             .padding(.horizontal, 12).padding(.top, 44)
         }
         .onAppear {
@@ -463,7 +293,7 @@ struct CommandPalette: View {
             } else if i > 0 {
                 // an explicit hairline: Divider at 0.4 all but vanished on the material.
                 // -6 cancels the list's own inset so it runs edge to edge of the card.
-                Rectangle().fill(Color.primary.opacity(0.14))
+                Rectangle().fill(Color.primary.opacity(Alpha.cardDivider))
                     .frame(height: 1)
                     .padding(.horizontal, -6).padding(.vertical, 8)
             }
@@ -473,22 +303,19 @@ struct CommandPalette: View {
     private func row(_ item: Item, _ i: Int) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol(item))
-                .font(.system(size: 13, weight: .medium)) // same glyph weight as the chrome
+                .font(Fonts.chromeGlyph) // same glyph weight as the chrome
                 .frame(width: 18)
                 .foregroundStyle(.secondary)
             Text(label(item)).font(.callout).lineLimit(1)
             Spacer(minLength: 8)
             if case .cmd(let c) = item, !commands[c].keys.isEmpty {
-                KeyChip(keys: commands[c].keys)
+                Chip(text: commands[c].keys)
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         // hover is its own, lighter state — it deliberately does NOT move `index`
         // (see the note on `hovered`), so the two can show at once
-        .background(i == index ? Color.accentColor.opacity(0.18)
-                               : (hovered == i ? Color.primary.opacity(0.06) : .clear),
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .contentShape(Rectangle())
+        .rowBackground(selected: i == index, hovering: hovered == i)
         .onHover { inside in
             if inside { hovered = i } else if hovered == i { hovered = nil }
         }
@@ -581,9 +408,7 @@ struct NavCenter: View {
     var body: some View {
         VStack(spacing: 1) {
             HStack(spacing: 5) {
-                if showSyncDot {
-                    Circle().fill(syncColor(store.syncStatus)).frame(width: 6, height: 6)
-                }
+                if showSyncDot { SyncDot(status: store.syncStatus) }
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
             }
             if let subtitle {
@@ -608,7 +433,7 @@ struct PillView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
+            SyncDot(status: store.syncStatus)
             Text(store.selected.map { store.title(for: $0) } ?? "GitPad")
                 .font(.footnote.weight(.medium)).lineLimit(1)
             Spacer(minLength: 0)
@@ -618,8 +443,8 @@ struct PillView: View {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.caption2).foregroundStyle(.secondary)
                 .frame(width: 22, height: 22)
-                .background(expandHover ? Color.primary.opacity(0.08) : .clear,
-                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .background(expandHover ? Color.iconHoverBg : .clear,
+                            in: RoundedRectangle(cornerRadius: Radius.chip, style: .continuous))
                 .contentShape(Rectangle())
                 .onHover { expandHover = $0 }
                 .animation(Motion.quick, value: expandHover)
@@ -648,101 +473,13 @@ struct PillView: View {
     }
 }
 
-/// A 5pt capsule knob and no track line. Drawing is the ONLY thing overridden — an
-/// earlier version also narrowed the scroller to 9pt, which pushed the knob into the
-/// panel's rounded mask (it read as cut off at the ends) and fought the overlay
-/// scroller's expand animation. Standard geometry costs nothing: overlay scrollers
-/// float above the content, so the gutter takes no layout width either way.
-final class LeanScroller: NSScroller {
-    override class var isCompatibleWithOverlayScrollers: Bool { true }
-
-    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {} // no track line
-
-    override func drawKnob() {
-        guard bounds.height >= bounds.width else { return super.drawKnob() } // vertical only
-        let knob = rect(for: .knob)
-        let width: CGFloat = 5
-        // centred in the scroller, so it clears the window's corner radius at both ends
-        let r = NSRect(x: bounds.midX - width / 2, y: knob.minY + 2,
-                       width: width, height: knob.height - 4)
-        guard r.height > 0 else { return }
-        NSColor.secondaryLabelColor.withAlphaComponent(0.55).setFill()
-        NSBezierPath(roundedRect: r, xRadius: width / 2, yRadius: width / 2).fill()
-    }
-}
-
-/// Give a SwiftUI ScrollView/List/Form the same lean scroller: `.background(LeanScrollbar())`
-/// on the scrolling container.
-///
-/// The work happens in `viewDidMoveToWindow`, NOT `updateNSView` — SwiftUI never calls
-/// update on a `.background()` representable, so an update-based version is dead code.
-/// SwiftUI also wraps the helper in its own host view, so the scroll view is never a
-/// sibling: climb ancestors until one of them contains it. Nothing private; a miss just
-/// leaves the stock scroller in place.
-struct LeanScrollbar: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { Swapper(frame: .zero) }
-    func updateNSView(_ v: NSView, context: Context) {}
-
-    final class Swapper: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard window != nil else { return }
-            // async: the sibling scroll view isn't built yet on the first pass
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                // placed inside the scrolling content → exact hit, no searching
-                if let sv = self.enclosingScrollView {
-                    Swapper.install(in: sv)
-                    return
-                }
-                guard let start = self.superview else { return }
-                var node: NSView? = start
-                for _ in 0..<6 { // bounded, so we can't wander into an unrelated screen
-                    guard let n = node else { return }
-                    if let sv = Swapper.firstScrollView(in: n) {
-                        Swapper.install(in: sv)
-                        return
-                    }
-                    node = n.superview
-                }
-            }
-        }
-
-        static func install(in sv: NSScrollView) {
-            guard !(sv.verticalScroller is LeanScroller) else { return }
-            sv.verticalScroller = LeanScroller()
-            sv.tile() // else the swapped-in scroller lays out 0pt wide
-        }
-
-        static func firstScrollView(in view: NSView) -> NSScrollView? {
-            if let sv = view as? NSScrollView { return sv }
-            for sub in view.subviews {
-                if let hit = firstScrollView(in: sub) { return hit }
-            }
-            return nil
-        }
-    }
-}
-
-/// Refined translucent material; automatically softens when the window is inactive.
-struct GlassBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let v = NSVisualEffectView()
-        v.material = .popover
-        v.blendingMode = .behindWindow
-        v.state = .followsWindowActiveState
-        return v
-    }
-    func updateNSView(_ v: NSView, context: Context) {}
-}
-
 // MARK: - Capture (just the editor)
 
 struct CaptureView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
-    @AppStorage("theme") private var themeID = "System"
+    @Environment(\.theme) private var theme
     @State private var nudgeDismissed = false
 
     var body: some View {
@@ -772,7 +509,7 @@ struct CaptureView: View {
             MarkdownTextView(text: $store.text,
                              fontSize: CGFloat(editorFontSize),
                              design: fontDesign,
-                             themeID: themeID)
+                             theme: theme)
 
             bottomBar
         }
@@ -780,12 +517,13 @@ struct CaptureView: View {
         // so they work from every screen — not just here.
     }
 
-    /// Pin / move / delete without a round-trip to the Library's ⋯ menu, plus a live word
-    /// count. Editor screen only — the Library already has all three on every row.
-    /// The header is deliberately untouched: nothing moved out of it, it stays 42pt.
+    /// A live word count and pin — the two things you want *while writing*. Move and delete
+    /// deliberately don't live here: they're filing, not writing, and a destructive control
+    /// one slip away from the text is the wrong trade. Both stay on every Library row's ⋯
+    /// menu, plus ⌘⌫ and the ⌘K palette. The header stays 42pt.
     private var bottomBar: some View {
         VStack(spacing: 0) {
-            Divider().opacity(0.4)
+            SoftDivider()
             HStack(spacing: 2) {
                 Text("\(wordCount) words")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -794,21 +532,6 @@ struct CaptureView: View {
                 if let sel = store.selected {
                     ChromeIcon(symbol: store.isPinned(sel) ? "pin.fill" : "pin",
                                help: store.isPinned(sel) ? "Unpin" : "Pin") { store.togglePin(sel) }
-                    Menu {
-                        Button("Notes") { store.move(sel, to: nil) }
-                        ForEach(store.folders, id: \.self) { f in
-                            Button(f) { store.move(sel, to: f) }
-                        }
-                    } label: {
-                        Image(systemName: "folder")
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: ChromeIcon.side, height: ChromeIcon.side)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                    .foregroundStyle(.secondary)
-                    .help("Move to folder")
-                    ChromeIcon(symbol: "trash", help: "Delete (⌘⌫)") { store.deleteCurrent() }
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 2)
@@ -841,15 +564,34 @@ struct SettingsView: View {
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
+    @AppStorage("autoCheckUpdates") private var autoCheckUpdates = true
+    @AppStorage("autoUpdate") private var autoUpdate = false
     @State private var remote = ""
     @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
     @State private var aheadBehind: (ahead: Int, behind: Int)?
+    @State private var checkingUpdate = false
+    @State private var checkNote: String? // manual-check result only; the timer stays silent
+    @FocusState private var remoteFocused: Bool
+
+    /// Save is live only when there's something to save — an enabled button that does
+    /// nothing is worse feedback than a disabled one.
+    private var remoteChanged: Bool {
+        let t = remote.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t != shownRemote
+    }
+
+    private func pendingLabel(_ ab: (ahead: Int, behind: Int)) -> String {
+        var parts: [String] = []
+        if ab.ahead > 0 { parts.append("\(ab.ahead) to push") }
+        if ab.behind > 0 { parts.append("\(ab.behind) to pull") }
+        return parts.joined(separator: " · ")
+    }
 
     /// Local state, deliberately NOT new `Screen` cases: those would multiply the
     /// `goBack()` / settingsReturn branches for nothing. Esc and ⌘, keep working as-is;
     /// the tab just resets to General after a Setup-guide round trip.
     enum Tab: String, CaseIterable {
-        case general = "General", appearance = "Appearance", shortcuts = "Shortcuts", sync = "Sync"
+        case general = "General", appearance = "Appearance", shortcuts = "Hotkeys", sync = "Sync"
     }
     @State private var tab: Tab = .general
 
@@ -899,12 +641,32 @@ struct SettingsView: View {
                                 Divider().frame(height: 14)
                                 stepper("plus") { editorFontSize = min(20, editorFontSize + 1) }
                             }
-                            .background(Color.primary.opacity(0.06), in: Capsule())
+                            .background(Color.quietFill, in: Capsule())
                         }
                     }
                     Text("The quick brown fox jumps over the lazy dog.")
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
+                }
+                Section {
+                    LabeledContent("Version") { Text(Updater.currentVersion ?? "dev") }
+                    // The opt-out is what keeps SECURITY.md's "no network calls except your
+                    // git remote" honest — off means the app never contacts github.com.
+                    Toggle("Check automatically", isOn: $autoCheckUpdates)
+                    if autoCheckUpdates {
+                        Toggle("Install updates automatically", isOn: $autoUpdate)
+                    }
+                    updateRow
+                } header: {
+                    Text("Updates")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Checks github.com/stalinzbb/GitPad about once a day. Nothing is sent except the request.")
+                        if autoCheckUpdates && autoUpdate {
+                            Text("Downloads and verifies in the background, then installs when you quit — or right away with Restart to Update. Never while you're writing.")
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     Button(role: .destructive) {
@@ -918,30 +680,22 @@ struct SettingsView: View {
                 }
 
                 case .appearance:
+                // Full-width row, not a LabeledContent trailing slot: that slot compresses
+                // on a narrow panel and clipped the swatches into different shapes.
                 Section {
-                    LabeledContent("Theme") {
-                        HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: Space.m) {
+                        HStack(spacing: Space.xl) {
                             ForEach(Theme.all) { t in
-                                Button { themeID = t.id } label: {
-                                    Circle().fill(t.swatchBg)
-                                        .frame(width: 26, height: 26)
-                                        .overlay(Circle().fill(t.accentSwift).frame(width: 12, height: 12))
-                                        .overlay(themeID == t.id
-                                            ? Image(systemName: "checkmark")
-                                                .font(.system(size: 8, weight: .bold))
-                                                .foregroundStyle(.white)
-                                            : nil)
-                                        .overlay(Circle().strokeBorder(
-                                            Color.primary.opacity(themeID == t.id ? 0.45 : 0.12),
-                                            lineWidth: themeID == t.id ? 2 : 1))
-                                        .animation(Motion.quick, value: themeID)
-                                }
-                                .buttonStyle(.plain)
-                                .help(t.id)
+                                ThemeSwatch(theme: t, selected: themeID == t.id) { themeID = t.id }
                             }
                         }
-                        .padding(.vertical, 2)
+                        Text(themeID) // say which one is on; the swatches alone are a guess
+                            .font(.caption).foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, Space.xxs)
+                } header: {
+                    Text("Theme")
                 } footer: {
                     Text("Changes apply immediately — there's no Save button.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -954,44 +708,58 @@ struct SettingsView: View {
                 ShortcutsList()
 
                 case .sync:
+                // One thing per row, in the order you do them: point it at a repo, then
+                // watch it work. The field is the house style — .roundedBorder renders a
+                // system-appearance well that ignores the theme entirely.
                 Section {
-                    HStack {
+                    VStack(alignment: .leading, spacing: Space.m) {
                         TextField("git@github.com:you/notes.git", text: $remote)
-                            .textFieldStyle(.roundedBorder)
                             .font(.caption.monospaced())
+                            .focused($remoteFocused)
+                            .fieldStyle(focused: remoteFocused)
                             .onSubmit { saveRemote() }
-                        Button("Save") { saveRemote() }
-                            .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    LabeledContent("Status") {
-                        HStack(spacing: 8) {
-                            Circle().fill(syncColor(store.syncStatus)).frame(width: 7, height: 7)
-                            Group {
-                                Text(store.syncStatus.label)
-                                if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
-                                    Text("↑\(ab.ahead) ↓\(ab.behind)")
-                                }
-                            }
-                            .font(.callout).foregroundStyle(.secondary)
-                            Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
-                                .disabled(store.syncing)
+                        HStack(alignment: .firstTextBaseline, spacing: Space.m) {
+                            Text("SSH uses this Mac's existing keys — nothing to log in to. HTTPS works too.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Button("Save") { saveRemote() }
+                                .disabled(!remoteChanged)
                         }
                     }
-                    if store.syncStatus == .offline {
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            FixSyncPanel(store: store)
-                        }
-                        .listRowBackground(Color.orange.opacity(0.08))
-                    }
+                    .padding(.vertical, Space.xxs)
                 } header: {
                     HStack {
-                        Text("Sync")
+                        Text("Repository")
                         Spacer()
                         Button("Setup guide") { store.screen = .gitSetup }
                             .buttonStyle(.plain)
                             .foregroundStyle(.tint)
+                    }
+                }
+                Section("Status") {
+                    HStack(spacing: Space.l) {
+                        SyncDot(status: store.syncStatus)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(store.syncStatus.label).font(.callout)
+                            if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
+                                // spell it out: "↑2 ↓1" is a git idiom, not plain language
+                                Text(pendingLabel(ab))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
+                            .disabled(store.syncing)
+                    }
+                    .padding(.vertical, Space.xxs)
+                    if store.syncStatus == .offline {
+                        HStack(alignment: .top, spacing: Space.m) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Color.statusWarn)
+                            FixSyncPanel(store: store)
+                        }
+                        .listRowBackground(Color.statusWarn.opacity(Alpha.iconHover))
                     }
                 }
                 if !store.conflicts.isEmpty {
@@ -1029,6 +797,58 @@ struct SettingsView: View {
     private func saveRemote() {
         GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
         store.requestSync?()
+    }
+
+    /// The one row that changes with `store.update`. Everything here is a plain Form row —
+    /// an update never takes over the screen, and never appears over the editor at all.
+    @ViewBuilder private var updateRow: some View {
+        switch store.update {
+        case .available(let r):
+            LabeledContent("Version \(r.version) is available") {
+                HStack(spacing: 10) {
+                    Button("Update") { Updater.install(r) { store.update = $0 } }
+                    Button("View Release") { NSWorkspace.shared.open(r.pageURL) }
+                        .buttonStyle(.plain).foregroundStyle(.tint)
+                }
+            }
+        case .busy(let stage):
+            LabeledContent(stage) { ProgressView().controlSize(.small) }
+        case .failed(let why):
+            LabeledContent {
+                Button("View Releases") { NSWorkspace.shared.open(Updater.releasesPage) }
+            } label: {
+                Text(why).font(.caption).foregroundStyle(.secondary)
+            }
+        case .ready(let v):
+            LabeledContent("Version \(v) is ready") {
+                Button("Restart to Update") { Updater.installStagedNow { store.update = $0 } }
+            }
+        case .none:
+            LabeledContent {
+                Button(checkingUpdate ? "Checking…" : "Check for Updates") { checkForUpdates() }
+                    .disabled(checkingUpdate)
+            } label: {
+                if let checkNote {
+                    Text(checkNote).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Same shape as refreshGitInfo: kick off-main, land back on main. Unlike the timer's
+    /// check this one asked for an answer, so "couldn't reach GitHub" is said out loud.
+    private func checkForUpdates() {
+        checkingUpdate = true
+        checkNote = nil
+        Updater.check { release, ok in
+            checkingUpdate = false
+            UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
+            if let release {
+                store.update = .available(release)
+            } else {
+                checkNote = ok ? "Up to date" : "Couldn't check"
+            }
+        }
     }
 
     private func refreshGitInfo() {
@@ -1200,7 +1020,8 @@ struct ConflictView: View {
             }
             .frame(minHeight: 120)
             .background(LeanScrollbar())
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+            .background(Color.primary.opacity(Alpha.inset),
+                        in: RoundedRectangle(cornerRadius: Radius.control))
         }
     }
 }
@@ -1235,7 +1056,7 @@ struct ShortcutsList: View {
 
     private func rows(_ items: [(String, String)]) -> some View {
         ForEach(items, id: \.0) { label, keys in
-            LabeledContent(label) { KeyChip(keys: keys) }
+            LabeledContent(label) { Chip(text: keys) }
         }
     }
 }
@@ -1251,25 +1072,25 @@ struct HotkeyRecorder: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Shortcut")
+                Text("Summon GitPad")
                 Spacer()
                 Button { recording ? stop() : start() } label: {
                     Text(recording ? "Press keys…" : display)
                         .font(.callout.weight(.medium))
                         .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Color.primary.opacity(recording ? 0.12 : 0.06),
-                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.12)))
+                        .background(Color.primary.opacity(recording ? Alpha.strokeStrong : Alpha.hover),
+                                    in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(Alpha.strokeStrong)))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
             Text(warning ?? (recording
                              ? "Esc cancels."
-                             : "Press \(display) from any app to summon GitPad — click to change."))
+                             : "Press this from any app, even when GitPad is hidden — click to change."))
                 .font(.caption)
-                .foregroundStyle(warning == nil ? .secondary : Color.orange)
+                .foregroundStyle(warning == nil ? .secondary : Color.statusWarn)
         }
         .onDisappear(perform: stop) // never leave a live monitor behind
     }
@@ -1417,10 +1238,10 @@ struct LibraryView: View {
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(Color.primary.opacity(0.06),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color.quietFill,
+                        in: RoundedRectangle(cornerRadius: Radius.field, style: .continuous))
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8) // breathe below the chrome bar
-            Divider().opacity(0.4)
+            SoftDivider()
 
             HStack(spacing: 0) {
                 sourceRail.disabled(searching) // browsing is paused while searching everything
@@ -1440,9 +1261,7 @@ struct LibraryView: View {
                     sourceRow(.daily)
                     sourceRow(.inbox)
                     if !folders.isEmpty {
-                        Text("Folders".uppercased()) // matches the note-list section headers
-                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                            .tracking(0.6)
+                        SectionLabel(text: "Folders") // matches the note-list section headers
                             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
                         ForEach(folders, id: \.self) { f in
                             FolderRailRow(name: f, count: count(.folder(f)),
@@ -1457,7 +1276,7 @@ struct LibraryView: View {
             }
             .background(LeanScrollbar())
 
-            Divider().opacity(0.4)
+            SoftDivider()
             if creatingFolder {
                 TextField("Folder name", text: $newFolderName)
                     .textFieldStyle(.plain)
@@ -1483,9 +1302,7 @@ struct LibraryView: View {
                         .font(.callout).lineLimit(1)
                         .frame(maxWidth: .infinity, minHeight: railSlot, alignment: .leading)
                         .padding(.horizontal, 10).padding(.vertical, 3)
-                        .background(newFolderHover ? Color.primary.opacity(0.05) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 6))
-                        .contentShape(Rectangle())
+                        .rowBackground(hovering: newFolderHover)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -1543,9 +1360,7 @@ struct LibraryView: View {
                 .font(.callout)
                 .frame(maxWidth: .infinity, minHeight: railSlot, alignment: .leading) // match folder-row height
                 .padding(.horizontal, 10).padding(.vertical, 3)
-                .background(source == s ? Color.accentColor.opacity(0.18) : .clear,
-                            in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
+                .rowBackground(selected: source == s)
         }
         .buttonStyle(.plain)
     }
@@ -1567,9 +1382,7 @@ struct LibraryView: View {
                                 NoteRow(store: store, url: url)
                             }
                         } header: {
-                            Text(name.uppercased())
-                                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                                .tracking(0.6)
+                            SectionLabel(text: name)
                         }
                     }
                 }
@@ -1630,10 +1443,7 @@ struct FolderRailRow: View {
             .frame(width: railSlot, height: railSlot)
         }
         .padding(.horizontal, 10).padding(.vertical, 3)
-        .background(selected ? Color.accentColor.opacity(0.18)
-                             : (hovering ? Color.primary.opacity(0.05) : .clear),
-                    in: RoundedRectangle(cornerRadius: 6))
-        .contentShape(Rectangle())
+        .rowBackground(selected: selected, hovering: hovering)
         .onTapGesture(perform: select)
         .onHover { hovering = $0 }
         .animation(Motion.quick, value: hovering)
@@ -1671,10 +1481,7 @@ struct NoteRow: View {
             }
             Spacer(minLength: 4)
             if store.folder(of: url) == "Daily" {
-                Text("Daily")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.primary.opacity(0.06), in: Capsule())
+                Chip(text: "Daily", font: .caption2)
             }
             Menu {
                 Button("Open") { store.open(url) }
@@ -1690,7 +1497,7 @@ struct NoteRow: View {
                 Button("Delete", role: .destructive) { store.delete(url) }
             } label: {
                 Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
-                    .frame(width: ChromeIcon.side, height: ChromeIcon.side) // constant slot; no .fixedSize() remeasure
+                    .iconSlot() // constant slot; no .fixedSize() remeasure
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -1699,8 +1506,7 @@ struct NoteRow: View {
             .allowsHitTesting(hovering) // hidden ⋯ must not eat taps meant for the row
         }
         .padding(.vertical, 5).padding(.horizontal, 6)
-        .background(Color.primary.opacity(hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 6))
-        .contentShape(Rectangle())
+        .rowBackground(hovering: hovering)
         .onTapGesture { store.open(url) }
         .onHover { hovering = $0 }
         .animation(Motion.quick, value: hovering)
@@ -1793,7 +1599,7 @@ struct MarkdownTextView: NSViewRepresentable {
     @Binding var text: String
     var fontSize: CGFloat = 14
     var design: String = "system"
-    var themeID: String = "System"
+    var theme: Theme = Theme.named("System")
 
     func makeNSView(context: Context) -> NSScrollView {
         // TextKit 1 stack so our layout manager can draw full-width dividers
@@ -1808,7 +1614,7 @@ struct MarkdownTextView: NSViewRepresentable {
         tv.isRichText = false
         tv.allowsUndo = true
         tv.font = Coordinator.baseFont(fontSize, design)
-        tv.textContainerInset = NSSize(width: 20, height: 14) // room to breathe, like a real notes app
+        tv.textContainerInset = EditorMetrics.inset // room to breathe, like a real notes app
         tv.defaultParagraphStyle = Coordinator.paragraphStyle
         tv.drawsBackground = false
         tv.isVerticallyResizable = true
@@ -1837,10 +1643,12 @@ struct MarkdownTextView: NSViewRepresentable {
         guard let tv = scroll.documentView as? SmartTextView, let storage = tv.textStorage else { return }
         context.coordinator.parent = self
         if context.coordinator.fontSize != fontSize || context.coordinator.design != design
-            || context.coordinator.themeID != themeID {
+            || context.coordinator.themeID != theme.id {
             context.coordinator.fontSize = fontSize
             context.coordinator.design = design
-            context.coordinator.themeID = themeID
+            // string compare, not the whole Theme: this guard is what keeps a stray
+            // updateNSView from re-highlighting the entire document
+            context.coordinator.themeID = theme.id
             tv.font = Coordinator.baseFont(fontSize, design)
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
@@ -1880,8 +1688,8 @@ struct MarkdownTextView: NSViewRepresentable {
         /// only via `defaultParagraphStyle` would be wiped on the first keystroke.
         static let paragraphStyle: NSParagraphStyle = {
             let p = NSMutableParagraphStyle()
-            p.lineHeightMultiple = 1.25
-            p.paragraphSpacing = 6
+            p.lineHeightMultiple = EditorMetrics.lineHeightMultiple
+            p.paragraphSpacing = EditorMetrics.paragraphSpacing
             return p
         }()
 
@@ -2032,17 +1840,20 @@ struct MarkdownTextView: NSViewRepresentable {
             func headingStyle(_ before: CGFloat, _ hFont: NSFont) -> NSParagraphStyle {
                 let p = Self.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
                 p.paragraphSpacingBefore = before
-                p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: hFont) * 1.25).rounded()
+                p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: hFont)
+                    * EditorMetrics.lineHeightMultiple).rounded()
                 return p
             }
             // typographic scale: H1 ≈ 1.6×, H2 ≈ 1.3×, H3 ≈ 1.15× body
-            let h1 = Self.bold(Self.baseFont(fontSize + 8, design))
-            let h2 = Self.bold(Self.baseFont(fontSize + 4, design))
-            let h3 = Self.bold(Self.baseFont(fontSize + 2, design))
+            let (o1, o2, o3) = EditorMetrics.headingOffsets
+            let (b1, b2, b3) = EditorMetrics.headingSpaceBefore
+            let h1 = Self.bold(Self.baseFont(fontSize + o1, design))
+            let h2 = Self.bold(Self.baseFont(fontSize + o2, design))
+            let h3 = Self.bold(Self.baseFont(fontSize + o3, design))
             let list: [(NSRegularExpression, [NSAttributedString.Key: Any])] = [
-                (re(#"^# .*$"#), [.font: h1, .paragraphStyle: headingStyle(14, h1)]),
-                (re(#"^## .*$"#), [.font: h2, .paragraphStyle: headingStyle(10, h2)]),
-                (re(#"^### .*$"#), [.font: h3, .paragraphStyle: headingStyle(8, h3)]),
+                (re(#"^# .*$"#), [.font: h1, .paragraphStyle: headingStyle(b1, h1)]),
+                (re(#"^## .*$"#), [.font: h2, .paragraphStyle: headingStyle(b2, h2)]),
+                (re(#"^### .*$"#), [.font: h3, .paragraphStyle: headingStyle(b3, h3)]),
                 // hide the hash marks entirely so headers read as rendered titles
                 // (no lookahead: a bare "# " collapses immediately, so the line never
                 // jumps left when the first title character lands)
@@ -2051,7 +1862,8 @@ struct MarkdownTextView: NSViewRepresentable {
                 (re(#"\*\*[^*\n]+\*\*"#), [.font: Self.bold(f)]),
                 (re(#"(?<!\*)\*[^*\n]+\*(?!\*)"#), [.obliqueness: 0.15]),
                 (re(#"~~[^~\n]+~~"#), [.strikethroughStyle: NSUnderlineStyle.single.rawValue]),
-                (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular),
+                (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(
+                                        ofSize: fontSize + EditorMetrics.codeSizeDelta, weight: .regular),
                                      .foregroundColor: theme.code]),
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
                 (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
@@ -2099,7 +1911,7 @@ struct MarkdownTextView: NSViewRepresentable {
         private func applyListLayout(_ storage: NSTextStorage, in range: NSRange) {
             let ns = storage.string as NSString
             let font = Self.baseFont(fontSize, design)
-            let unit = (fontSize * 1.5).rounded() // extra indent per nest level
+            let unit = (fontSize * EditorMetrics.indentUnitFactor).rounded() // extra indent per nest level
             ns.enumerateSubstrings(in: range, options: [.byParagraphs]) { sub, subR, _, _ in
                 guard let line = sub, let m = ListLogic.match(line) else { return }
                 let lineNS = line as NSString
@@ -2125,8 +1937,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 let style: NSParagraphStyle
                 if let s = self.listStyleCache[key] { style = s } else {
                     let p = NSMutableParagraphStyle()
-                    p.lineHeightMultiple = 1.25
-                    p.paragraphSpacing = 2 // tighter inside lists; same for bullets and numbers
+                    p.lineHeightMultiple = EditorMetrics.lineHeightMultiple
+                    // tighter inside lists; same for bullets and numbers
+                    p.paragraphSpacing = EditorMetrics.listParagraphSpacing
                     p.firstLineHeadIndent = CGFloat(depth) * unit
                     p.headIndent = p.firstLineHeadIndent + width // wrap under the content
                     self.listStyleCache[key] = p
@@ -2165,9 +1978,10 @@ struct MarkdownTextView: NSViewRepresentable {
             let ns = tv.string as NSString
             let caret = min(tv.selectedRange().location, ns.length)
             let line = ns.substring(with: ns.lineRange(for: NSRange(location: caret, length: 0)))
-            if line.hasPrefix("# ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 8, design)) }
-            else if line.hasPrefix("## ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 4, design)) }
-            else if line.hasPrefix("### ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + 2, design)) }
+            let (o1, o2, o3) = EditorMetrics.headingOffsets
+            if line.hasPrefix("# ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + o1, design)) }
+            else if line.hasPrefix("## ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + o2, design)) }
+            else if line.hasPrefix("### ") { attrs[.font] = Self.bold(Self.baseFont(fontSize + o3, design)) }
             tv.typingAttributes = attrs
         }
 
@@ -2363,6 +2177,8 @@ struct MarkdownTextView: NSViewRepresentable {
                   NSEvent.pressedMouseButtons == 0,
                   let lm = tv.layoutManager, let tc = tv.textContainer else { return }
             if actionPopover.contentViewController == nil {
+                // Built once and kept. Nothing here reads \.theme today; anything added that
+                // does would need re-injecting on theme change, since this host never updates.
                 actionPopover.contentViewController = NSHostingController(rootView: ActionBar(coordinator: self))
                 actionPopover.behavior = .transient
             }
