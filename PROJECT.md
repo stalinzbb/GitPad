@@ -52,6 +52,11 @@ gotchas, and things that would surprise a contributor._
 - **SwiftUI `TextEditor`** is too limited for highlighting → wrapped `NSTextView` (`MarkdownTextView`).
 - **⌥Space** may collide with other launchers (Raycast/Alfred); it's now rebindable in Settings → Global Hotkey. The binding is swapped via Carbon `Unregister`/`Register` (see `Hotkey.apply`); the shared event handler is installed once so re-registering never double-fires. On collision (`eventHotKeyExistsErr`) the old binding is restored and the recorder shows "already in use".
 - **Ad-hoc signing** with Hardened Runtime — fine locally; distribution needs Developer ID + notarization.
+- **Empty folders don't sync**: folders are plain directories and git can't represent one
+  without a file inside, so an empty folder exists only on the Mac that created it (and
+  deleting one is likewise local-only). It reaches the remote once its first note saves.
+  Accepted behavior — the alternative (`.gitkeep` placeholders) would put sidecar files
+  in the notes repo.
 - **`unzip` silently breaks a signed bundle.** It drops the extended attributes the signature seals over, so a perfectly good release then fails `codesign --verify` with "a sealed resource is missing or invalid" — a message that reads like tampering. `Updater` expands with `/usr/bin/ditto -x -k`, which preserves them. Same trap applies to any by-hand check of a release zip: extract with `ditto` or you'll be debugging a signature that was never broken.
 - **`GET /releases/latest` 404s for this repo.** Every GitPad release so far is marked *pre-release*, and that endpoint only ever returns a full release. `Updater` lists `?per_page=5` and takes the first non-draft entry, which works either way. Tags are v-prefixed (`v0.9.3`), assets are not (`GitPad-0.9.3.zip`) — the updater strips the `v` before matching.
 - **Replacing the running app** uses move-aside (rename the live bundle out of the way, move the new one in), not `replaceItemAt`. Renaming a running bundle is safe — the executable keeps running from the renamed inode — and both renames are same-volume, hence atomic. `Hotkey.stop()` must run before the replacement launches, or the new instance can't register ⌥Space while this one still holds it.

@@ -233,6 +233,7 @@ final class NoteStore: ObservableObject {
         if let s = sel, s.deletingLastPathComponent().lastPathComponent == name {
             selected = dst.appendingPathComponent(s.lastPathComponent)
         }
+        onSaved?()
     }
 
     /// Non-destructive: move the folder's notes to the root Inbox, then remove it.
@@ -250,6 +251,7 @@ final class NoteStore: ObservableObject {
         try? fm.removeItem(at: folder)
         uncacheAll()
         refresh()
+        onSaved?()
     }
 
     func move(_ url: URL, to folder: String?) {
@@ -265,6 +267,7 @@ final class NoteStore: ObservableObject {
         let wasSelected = selected?.path == url.path
         refresh()
         if wasSelected { selected = dest }
+        onSaved?()
     }
 
     // MARK: notes
