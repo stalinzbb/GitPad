@@ -23,7 +23,9 @@ or it doesn't ship.
 
 ## Later — reach
 
-- [ ] Optional end-to-end encryption of the repo (age / git-crypt).
+- [x] **Encrypted vault** — notes folder inside an AES-256 sparse bundle mounted at the same
+      path, locks with the screen (Settings → General, or onboarding). Repo-level age/git-crypt
+      stays out: the vault protects the disk, the remote is your choice.
 - [ ] CLI companion (`gitpad new "…"`).
 - [ ] Spotlight importer.
 - [ ] Launch at login.

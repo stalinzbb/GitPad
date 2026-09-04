@@ -199,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         store.onSaved = { [weak self] in self?.backgroundSync() }
         store.onHide = { [weak self] in self?.panel.orderOut(nil) }
         store.requestSync = { [weak self] in self?.backgroundSync() }
+        store.onSyncQueue = { [syncQueue] block in syncQueue.async(execute: block) }
         store.setPill = { [weak self] on in
             self?.store.pill = on
             self?.panel.applyPill(on)
@@ -226,9 +227,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateTimer = Timer.scheduledTimer(withTimeInterval: 21_600, repeats: true) { [weak self] _ in
             self?.checkForUpdates()
         }
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
-        backgroundSync()
+        let ws = NSWorkspace.shared.notificationCenter
+        ws.addObserver(self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
+        // Encrypted vault: gone whenever nobody is at the keyboard. Handlers no-op unless enabled.
+        ws.addObserver(self, selector: #selector(lockVault), name: NSWorkspace.willSleepNotification, object: nil)
+        ws.addObserver(self, selector: #selector(unlockVault), name: NSWorkspace.didWakeNotification, object: nil)
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(self, selector: #selector(lockVault), name: .init("com.apple.screenIsLocked"), object: nil)
+        dnc.addObserver(self, selector: #selector(unlockVault), name: .init("com.apple.screenIsUnlocked"), object: nil)
+        unlockVault()    // from the Keychain; a miss leaves LockedView up for the passphrase
+        backgroundSync() // no-op while locked — unlock's completion syncs instead
         checkForUpdates()
 
         // show the panel on first launch so opening the app isn't a no-op
@@ -247,7 +255,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // automatically" off has to stop the automatic install too, or the switch lies.
         // The staged bundle stays put, and "Restart to Update" still offers it explicitly.
         if UserDefaults.standard.bool(forKey: "autoUpdate") { Updater.installStagedQuietly() }
+        // Vault: wait for the sync the flush just queued, then detach — never leave notes
+        // mounted after quit. The sync's completion is main.async, so blocking main is safe.
+        // ponytail: an offline push can hold quit for its timeout; fine for a menu-bar app.
+        if Vault.isEnabled { syncQueue.sync { Vault.lock() } }
         return .terminateNow
+    }
+
+    @objc func lockVault() { store.lockVault() }
+    @objc func unlockVault() {
+        guard Vault.isEnabled else { return }
+        // The Keychain read blocks for seconds while securityd validates the caller — never
+        // on main, or the panel and hotkey are dead until it returns.
+        syncQueue.async { [weak self] in
+            guard let p = Vault.keychainPassphrase else { return } // miss: LockedView asks
+            DispatchQueue.main.async { self?.store.unlockVault(p) }
+        }
     }
 
     // double-clicking the app (or `open`) while running shows the panel
@@ -333,7 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func revealNotes() { NSWorkspace.shared.activateFileViewerSelecting([store.dir]) }
 
     @objc func appendClipboard() {
-        guard let clip = NSPasteboard.general.string(forType: .string),
+        guard !store.locked, let clip = NSPasteboard.general.string(forType: .string),
               !clip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         store.selectDaily()
         store.screen = .capture
@@ -344,7 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: gitpad:// URL scheme (Raycast/Alfred/Shortcuts/scripts)
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard store.screen != .onboarding else { return } // don't hijack first-run
+        guard store.screen != .onboarding, !store.locked else { return } // don't hijack first-run or a locked vault
         for url in urls where url.scheme == "gitpad" { handleURL(url) }
     }
 
@@ -412,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func backgroundSync() {
+        guard !Vault.isLocked else { return } // covers the timer, wake, syncIfStale and onSaved alike
         let dir = store.dir
         store.syncing = true
         lastSyncKick = Date()

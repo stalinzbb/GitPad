@@ -9,7 +9,7 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
 
 - **Build:** `./build.sh` → `GitPad.app` (SwiftPM release build + ad-hoc codesign; also
   regenerates `Resources/AppIcon.icns` via `make-icns.sh` → `make-icon.swift` when stale).
-- **Test:** `./test_gitsync.sh` — drives the real binary (`GitPad --sync <dir>`) through a
+- **Test:** `./test_gitsync.sh` (plus `./test_vault.sh` and `./test_vault_app.sh` for the encrypted vault) — drives the real binary (`GitPad --sync <dir>`) through a
   bare remote: same-line conflicts, unrelated histories, true-conflict-only copies,
   modify/delete, push retry, new-device adoption (and its negative guard). Run after any
   change near `GitSync.sync` or `NoteStore` save/refresh. `GITPAD_DEVICE_NAME` overrides
@@ -20,7 +20,7 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
   at a scratch notes folder: `GITPAD_DIR=/tmp/gitpad-dev ./GitPad.app/Contents/MacOS/GitPad`.
   Without `GITPAD_DIR` a dev build edits `~/Documents/GitPad` and syncs to the real remote.
 
-## Source map (7 files, `Sources/GitPad/`)
+## Source map (8 files, `Sources/GitPad/`)
 
 | File | Role |
 |------|------|
@@ -31,6 +31,7 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
 | `GitSync.swift` | Every git op via `Process` on `/usr/bin/git` |
 | `EditorView.swift` | All SwiftUI: theme tokens, NavBar chrome, screens, NSTextView markdown editor |
 | `OnboardingView.swift` | First-run walkthrough + reusable git-setup guide |
+| `Vault.swift` | Optional encrypted vault: hdiutil sparse bundle mounted at the notes path, Keychain passphrase, erase-from-Mac |
 
 ## Invariants — do not break
 
@@ -38,7 +39,9 @@ truth — [README.md](README.md) (vision/features), [PROJECT.md](PROJECT.md)
   last resort that needs its own justification (see the "ladder" in README Contributing).
 - **Git only via fixed argument arrays**, never shell strings — user input (titles, remote
   URLs) goes straight to `execve` and can't inject. See `GitSync.exec` and its comment.
-- **Notes stay plain Markdown** in `~/Documents/GitPad/`. The editor shows ☐/☑ glyphs;
+- **Notes stay plain Markdown** in `~/Documents/GitPad/` — optionally inside an encrypted sparse
+  bundle mounted at that same path (`Vault.swift`); nothing above `NoteStore.dir` knows the
+  difference. The editor shows ☐/☑ glyphs;
   `NoteStore.to/fromMarkdown` converts to/from `- [ ]` on disk. No proprietary format,
   no frontmatter, no sidecar index files.
 - **Sync never blocks writing** and never shows a merge UI — clean merge first, then

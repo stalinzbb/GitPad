@@ -14,8 +14,19 @@ struct OnboardingView: View {
          "It saves itself. Type / for commands,\n⌘N for a new note, ⌘L for your library."),
         ("arrow.triangle.branch", "Sync with git",
          "Optional. Create a private repo (github.com/new),\npaste its SSH URL, and your notes follow you everywhere.\nUses your existing SSH keys — nothing to log into."),
+        ("lock.shield", "Encrypt on this Mac",
+         "Optional. Keeps your notes in an encrypted disk image\nthat locks with your screen. Good for a work laptop.\nLeave blank to keep plain files."),
     ] }
     @State private var testResult: String?
+    @State private var pass = ""
+    @State private var pass2 = ""
+    @FocusState private var passFocused: Bool
+    @FocusState private var pass2Focused: Bool
+    @State private var encrypting = false
+    @State private var vaultResult: String?
+    private var last: Int { pages.count - 1 }
+    private var devBuild: Bool { ProcessInfo.processInfo.environment["GITPAD_DIR"] != nil }
+    private var passInvalid: Bool { !pass.isEmpty && (pass.count < 8 || pass != pass2) }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -43,21 +54,37 @@ struct OnboardingView: View {
                         .foregroundStyle(result.hasPrefix("✓") ? Color.statusOK : result == "…" ? Color.secondary : Color.statusErr)
                 }
             }
+            if step == last, !devBuild {
+                VStack(spacing: Space.s) {
+                    SecureField("Passphrase", text: $pass)
+                        .focused($passFocused)
+                        .fieldStyle(focused: passFocused)
+                    SecureField("Confirm passphrase", text: $pass2)
+                        .focused($pass2Focused)
+                        .fieldStyle(focused: pass2Focused)
+                    Text(vaultResult ?? "At least 8 characters. There is no recovery.")
+                        .font(.caption)
+                        .foregroundStyle(vaultResult == nil ? Color.secondary : Color.statusErr)
+                }
+                .frame(width: 240)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             Spacer()
             HStack(spacing: 6) {
-                ForEach(0..<3, id: \.self) { i in
+                ForEach(0..<pages.count, id: \.self) { i in
                     Circle()
                         .fill(i == step ? Color.primary : Color.secondary.opacity(0.3))
                         .frame(width: 6, height: 6)
                 }
             }
-            Button(step < 2 ? "Continue" : "Start writing") {
+            Button(step < last ? "Continue" : encrypting ? "Encrypting…" : "Start writing") {
                 withAnimation(Motion.pop) {
-                    if step < 2 { step += 1 } else { finish() }
+                    if step < last { step += 1 } else { finish() }
                 }
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
+            .disabled(step == last && (encrypting || passInvalid))
             .padding(.bottom, 24)
         }
         .padding()
@@ -93,8 +120,22 @@ struct OnboardingView: View {
     private func finish() {
         let url = remote.trimmingCharacters(in: .whitespacesAndNewlines)
         if !url.isEmpty { GitSync.setRemote(url, in: store.dir) }
-        onboarded = true
-        store.screen = .capture
+        guard !pass.isEmpty, !devBuild else { onboarded = true; store.screen = .capture; return }
+        // The folder already holds today's note (NoteStore.open), so it moves into the vault too.
+        encrypting = true; vaultResult = nil
+        store.flushPendingSave()
+        let queue = store.onSyncQueue ?? { DispatchQueue.global().async(execute: $0) }
+        queue {
+            let err = Vault.create(passphrase: pass)
+            DispatchQueue.main.async {
+                encrypting = false
+                if let err { vaultResult = "✗ " + err; return }
+                pass = ""; pass2 = ""
+                store.refresh()
+                onboarded = true
+                store.screen = .capture
+            }
+        }
     }
 }
 
