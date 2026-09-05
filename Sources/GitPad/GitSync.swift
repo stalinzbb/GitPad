@@ -285,3 +285,42 @@ enum GitSync {
         return "https://\(host)/\(path)"
     }
 }
+
+/// The last few sync runs, one line each — the Settings Sync tab's activity list. A record
+/// beats a verdict: "pulled 1 from the iMac, Tue 18:02" is what makes sync trustworthy.
+/// ponytail: five dicts in UserDefaults; a file in the repo if cross-Mac history is wanted.
+enum SyncLog {
+    struct Entry { let date: Date; let ok: Bool; let text: String }
+    private static let key = "syncLog", keep = 5
+
+    static var entries: [Entry] {
+        (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []).compactMap {
+            guard let d = $0["date"] as? Date, let ok = $0["ok"] as? Bool, let t = $0["text"] as? String
+            else { return nil }
+            return Entry(date: d, ok: ok, text: t)
+        }
+    }
+
+    /// Call around `GitSync.sync`: `before` is HEAD when the run started (may be empty on a
+    /// fresh repo). Counts what landed by commit author — this Mac's commits were pushed,
+    /// everyone else's were pulled.
+    static func record(ok: Bool, dir: URL, before: String) {
+        var text: String
+        if ok {
+            let authors = before.isEmpty ? [] : GitSync.run(["log", "--format=%an", "\(before)..HEAD"], in: dir)
+                .out.split(separator: "\n").map(String.init)
+            let mine = authors.filter { $0 == GitSync.deviceName }.count
+            let theirs = authors.filter { $0 != GitSync.deviceName }
+            var parts: [String] = []
+            if mine > 0 { parts.append("Pushed \(mine)") }
+            if !theirs.isEmpty { parts.append("pulled \(theirs.count) from \(theirs[0])") }
+            text = parts.isEmpty ? "Up to date" : parts.joined(separator: " · ")
+            if text.hasPrefix("pulled") { text = "P" + text.dropFirst() }
+        } else {
+            text = "Couldn't reach remote"
+        }
+        let entry: [String: Any] = ["date": Date(), "ok": ok, "text": text]
+        let all = Array(([entry] + (UserDefaults.standard.array(forKey: key) ?? [])).prefix(keep))
+        UserDefaults.standard.set(all, forKey: key)
+    }
+}

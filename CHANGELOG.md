@@ -5,6 +5,18 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+### Changed
+
+- **First run is two steps, not four.** Step 1 shows the bound hotkey as keycaps over a
+  live editor (it's today's note — what you type stays); step 2 is the sync guide with a
+  clear "Not now". The vault moved to Settings → Advanced behind one row; the Touch ID
+  toggle lives there too.
+- **Settings regrouped by decision:** Writing (font, size, theme) · Sync · Shortcuts ·
+  Advanced (updates, vault, quit, erase — destructive, last).
+- **Sync tab tells the record, not a verdict:** a problem card with one primary fix,
+  the repo as a value with "Change…", this Mac's name, and the last five sync runs
+  ("Pushed 2 · pulled 1 from the iMac, Tue 18:02").
+
 ## [0.12.0] — 2026-09-04
 
 The vault can now demand your fingerprint.

@@ -709,6 +709,7 @@ struct SettingsView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("vaultEnabled") private var vaultEnabled = false
     @AppStorage("vaultTouchID") private var vaultTouchID = false
+    @State private var vaultExpanded = false // the two passphrase fields hide behind one row
     @State private var vaultPass = ""
     @State private var vaultPass2 = ""
     @State private var vaultWorking = false
@@ -724,18 +725,9 @@ struct SettingsView: View {
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates = true
     @AppStorage("autoUpdate") private var autoUpdate = false
     @State private var remote = ""
-    @State private var shownRemote = "" // what we last populated `remote` with — detects user edits
-    @State private var aheadBehind: (ahead: Int, behind: Int)?
+    @State private var log: [SyncLog.Entry] = []
     @State private var checkingUpdate = false
     @State private var checkNote: String? // manual-check result only; the timer stays silent
-    @FocusState private var remoteFocused: Bool
-
-    /// Save is live only when there's something to save — an enabled button that does
-    /// nothing is worse feedback than a disabled one.
-    private var remoteChanged: Bool {
-        let t = remote.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t != shownRemote
-    }
 
     @ViewBuilder private var vaultSection: some View {
         Section {
@@ -753,7 +745,7 @@ struct SettingsView: View {
                 }
                 Button("Decrypt notes…", role: .destructive) { runVault(Vault.remove) }
                     .disabled(vaultWorking)
-            } else {
+            } else if vaultExpanded {
                 SecureField("Passphrase", text: $vaultPass)
                     .focused($vaultPassFocused).fieldStyle(focused: vaultPassFocused)
                 SecureField("Confirm passphrase", text: $vaultPass2)
@@ -763,6 +755,13 @@ struct SettingsView: View {
                     runVault { Vault.create(passphrase: p) }
                 }
                 .disabled(vaultPass.count < 8 || vaultPass != vaultPass2 || vaultWorking)
+            } else {
+                Button {
+                    withAnimation(Motion.quick) { vaultExpanded = true }
+                    vaultPassFocused = true
+                } label: {
+                    Label("Encrypt notes on this Mac…", systemImage: "lock.shield")
+                }
             }
             if let vaultResult {
                 Text(vaultResult).font(.caption)
@@ -771,12 +770,14 @@ struct SettingsView: View {
         } header: {
             Text("Encrypted vault")
         } footer: {
-            Text(vaultEnabled
-                 ? (vaultTouchID
-                    ? "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps. The passphrase is sealed by the Secure Enclave and released only after Touch ID (or your password on a Mac without it) — expect a prompt at launch and after every screen unlock. Decrypt puts the plain files back."
-                    : "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps; the passphrase is in your login Keychain, so unlocking is silent. Decrypt puts the plain files back.")
-                 : "Moves your notes into an AES-256 disk image mounted at the same folder — git sync is unchanged. Locks when the screen locks or the Mac sleeps; the passphrase is kept in your login Keychain. No recovery: a lost passphrase means lost notes unless a remote has them.")
-                .font(.caption).foregroundStyle(.secondary)
+            if vaultEnabled || vaultExpanded {
+                Text(vaultEnabled
+                     ? (vaultTouchID
+                        ? "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps. The passphrase is sealed by the Secure Enclave and released only after Touch ID (or your password on a Mac without it) — expect a prompt at launch and after every screen unlock. Decrypt puts the plain files back."
+                        : "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps; the passphrase is in your login Keychain, so unlocking is silent. Decrypt puts the plain files back.")
+                     : "Moves your notes into an AES-256 disk image mounted at the same folder — git sync is unchanged. Locks when the screen locks or the Mac sleeps; the passphrase is kept in your login Keychain. No recovery: a lost passphrase means lost notes unless a remote has them.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .disabled(devBuild)
     }
@@ -798,20 +799,14 @@ struct SettingsView: View {
         }
     }
 
-    private func pendingLabel(_ ab: (ahead: Int, behind: Int)) -> String {
-        var parts: [String] = []
-        if ab.ahead > 0 { parts.append("\(ab.ahead) to push") }
-        if ab.behind > 0 { parts.append("\(ab.behind) to pull") }
-        return parts.joined(separator: " · ")
-    }
-
     /// Local state, deliberately NOT new `Screen` cases: those would multiply the
     /// `goBack()` / settingsReturn branches for nothing. Esc and ⌘, keep working as-is;
-    /// the tab just resets to General after a Setup-guide round trip.
+    /// the tab just resets to Writing after a Setup-guide round trip.
+    /// Grouped by decision, not implementation: "how does my writing look?" is one tab.
     enum Tab: String, CaseIterable {
-        case general = "General", appearance = "Appearance", shortcuts = "Hotkeys", sync = "Sync"
+        case writing = "Writing", sync = "Sync", shortcuts = "Shortcuts", advanced = "Advanced"
     }
-    @State private var tab: Tab = .general
+    @State private var tab: Tab = .writing
 
     // (tag, label) — system designs plus Apple-bundled note-friendly fonts.
     // Nothing here ships with the app, so open-sourcing stays clean.
@@ -843,7 +838,7 @@ struct SettingsView: View {
 
             Form {
                 switch tab {
-                case .general:
+                case .writing:
                 Section("Editor") {
                     Picker("Font", selection: $fontDesign) {
                         ForEach(Self.fonts, id: \.0) { tag, label in
@@ -866,6 +861,37 @@ struct SettingsView: View {
                         .font(Font(MarkdownTextView.Coordinator.baseFont(CGFloat(editorFontSize), fontDesign) as CTFont))
                         .foregroundStyle(.secondary)
                 }
+                // Full-width row, not a LabeledContent trailing slot: that slot compresses
+                // on a narrow panel and clipped the swatches into different shapes.
+                Section {
+                    VStack(alignment: .leading, spacing: Space.m) {
+                        HStack(spacing: Space.xl) {
+                            ForEach(Theme.all) { t in
+                                ThemeSwatch(theme: t, selected: themeID == t.id) { themeID = t.id }
+                            }
+                        }
+                        Text(themeID) // say which one is on; the swatches alone are a guess
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, Space.xxs)
+                } header: {
+                    Text("Theme")
+                } footer: {
+                    Text("Changes apply immediately — there's no Save button.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                case .sync:
+                syncTab
+
+                case .shortcuts:
+                Section("Global Hotkey") {
+                    HotkeyRecorder()
+                }
+                ShortcutsList()
+
+                case .advanced:
                 Section {
                     LabeledContent("Version") { Text(Updater.currentVersion ?? "dev") }
                     // The opt-out is what keeps SECURITY.md's "no network calls except your
@@ -888,11 +914,17 @@ struct SettingsView: View {
                 }
                 vaultSection
                 Section {
-                    Button(role: .destructive) {
+                    Button {
                         NSApp.terminate(nil)
                     } label: {
                         Label("Quit GitPad", systemImage: "power")
                     }
+                } footer: {
+                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                // Last section, last tab, destructive tint: the one landmine gets a wide berth.
+                Section {
                     // Dragging the app to the Trash can't run code, so this is the only
                     // path that actually removes the notes from the machine.
                     Button(role: .destructive) {
@@ -901,6 +933,7 @@ struct SettingsView: View {
                     } label: {
                         Label("Erase GitPad from this Mac…", systemImage: "trash")
                     }
+                    .foregroundStyle(Color.statusErr)
                     .disabled(vaultWorking || devBuild || store.locked)
                     .alert("Erase GitPad and all notes from this Mac?", isPresented: $confirmErase) {
                         Button("Erase", role: .destructive) { runVault(Vault.erase) { NSApp.terminate(nil) } }
@@ -910,102 +943,8 @@ struct SettingsView: View {
                              + (eraseHasRemote ? "" : "\n\nNo remote is set: this is the only copy."))
                     }
                 } footer: {
-                    Text("Also ⌘Q from any screen, or the menu-bar icon. Deleting the app by hand leaves your notes on disk.")
+                    Text("Deleting the app by hand leaves your notes on disk.")
                         .font(.caption).foregroundStyle(.secondary)
-                }
-
-                case .appearance:
-                // Full-width row, not a LabeledContent trailing slot: that slot compresses
-                // on a narrow panel and clipped the swatches into different shapes.
-                Section {
-                    VStack(alignment: .leading, spacing: Space.m) {
-                        HStack(spacing: Space.xl) {
-                            ForEach(Theme.all) { t in
-                                ThemeSwatch(theme: t, selected: themeID == t.id) { themeID = t.id }
-                            }
-                        }
-                        Text(themeID) // say which one is on; the swatches alone are a guess
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, Space.xxs)
-                } header: {
-                    Text("Theme")
-                } footer: {
-                    Text("Changes apply immediately — there's no Save button.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                case .shortcuts:
-                Section("Global Hotkey") {
-                    HotkeyRecorder()
-                }
-                ShortcutsList()
-
-                case .sync:
-                // One thing per row, in the order you do them: point it at a repo, then
-                // watch it work. The field is the house style — .roundedBorder renders a
-                // system-appearance well that ignores the theme entirely.
-                Section {
-                    VStack(alignment: .leading, spacing: Space.m) {
-                        TextField("git@github.com:you/notes.git", text: $remote)
-                            .font(.caption.monospaced())
-                            .focused($remoteFocused)
-                            .fieldStyle(focused: remoteFocused)
-                            .onSubmit { saveRemote() }
-                        HStack(alignment: .firstTextBaseline, spacing: Space.m) {
-                            Text("SSH uses this Mac's existing keys — nothing to log in to. HTTPS works too.")
-                                .font(.caption2).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                            Button("Save") { saveRemote() }
-                                .disabled(!remoteChanged)
-                        }
-                    }
-                    .padding(.vertical, Space.xxs)
-                } header: {
-                    HStack {
-                        Text("Repository")
-                        Spacer()
-                        Button("Setup guide") { store.screen = .gitSetup }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.tint)
-                    }
-                }
-                Section("Status") {
-                    HStack(spacing: Space.l) {
-                        SyncDot(status: store.syncStatus)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(store.syncStatus.label).font(.callout)
-                            if let ab = aheadBehind, ab.ahead + ab.behind > 0 {
-                                // spell it out: "↑2 ↓1" is a git idiom, not plain language
-                                Text(pendingLabel(ab))
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                        Button(store.syncing ? "Syncing…" : "Sync Now") { store.requestSync?() }
-                            .disabled(store.syncing)
-                    }
-                    .padding(.vertical, Space.xxs)
-                    if store.syncStatus == .offline {
-                        HStack(alignment: .top, spacing: Space.m) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(Color.statusWarn)
-                            FixSyncPanel(store: store)
-                        }
-                        .listRowBackground(Color.statusWarn.opacity(Alpha.iconHover))
-                    }
-                }
-                if !store.conflicts.isEmpty {
-                    Section("Conflicts") {
-                        Button {
-                            store.screen = .conflicts
-                        } label: {
-                            Label("Review \(store.conflicts.count) conflict\(store.conflicts.count == 1 ? "" : "s")…",
-                                  systemImage: "exclamationmark.triangle.fill")
-                        }
-                    }
                 }
                 }
             }
@@ -1019,6 +958,81 @@ struct SettingsView: View {
         .onChange(of: store.syncStatus) { _ in refreshGitInfo() }
     }
 
+    /// Problem first, then facts, then the record. The repo is a value with a Change link,
+    /// not a form: editing goes through the setup guide, which already validates and syncs.
+    @ViewBuilder private var syncTab: some View {
+        if store.syncStatus == .offline {
+            Section {
+                FixSyncPanel(store: store, ahead: store.pending.ahead)
+                    .listRowBackground(Color.statusWarn.opacity(Alpha.iconHover))
+            }
+        } else if case .synced(let d) = store.syncStatus {
+            Section {
+                HStack(spacing: Space.l) {
+                    SyncDot(status: store.syncStatus)
+                    Text("Everything's synced · \(d.formatted(date: .omitted, time: .shortened))")
+                        .font(.callout)
+                }
+            }
+        }
+        Section("Repository") {
+            if remote.isEmpty {
+                Button("Set up sync…") { store.screen = .gitSetup }
+            } else {
+                LabeledContent {
+                    Button("Change…") { store.screen = .gitSetup }
+                        .buttonStyle(.plain).foregroundStyle(.tint).font(.caption)
+                } label: {
+                    Text(remote).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                }
+                LabeledContent("This Mac") { Text(GitSync.deviceName).foregroundStyle(.secondary) }
+            }
+        }
+        if !store.conflicts.isEmpty {
+            Section("Conflicts") {
+                Button {
+                    store.screen = .conflicts
+                } label: {
+                    Label("Review \(store.conflicts.count) conflict\(store.conflicts.count == 1 ? "" : "s")…",
+                          systemImage: "exclamationmark.triangle.fill")
+                }
+            }
+        }
+        if !remote.isEmpty {
+            Section {
+                if log.isEmpty {
+                    Text("Nothing yet — syncs on every save, every 5 minutes, and on wake.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(Array(log.enumerated()), id: \.offset) { _, e in
+                    HStack(spacing: Space.l) {
+                        SyncDot(status: e.ok ? .synced(e.date) : .offline)
+                        Text(e.text).font(.caption).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(e.date.formatted(activityStamp(e.date)))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Activity")
+                    Spacer()
+                    Button(store.syncing ? "Syncing…" : "Sync now") { store.requestSync?() }
+                        .buttonStyle(.plain).foregroundStyle(.tint)
+                        .disabled(store.syncing)
+                }
+            }
+        }
+    }
+
+    /// "10:31" today, "Tue 18:02" this week, else "Sep 2".
+    private func activityStamp(_ d: Date) -> Date.FormatStyle {
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return .dateTime.hour().minute() }
+        if d > cal.date(byAdding: .day, value: -6, to: Date())! { return .dateTime.weekday(.abbreviated).hour().minute() }
+        return .dateTime.month(.abbreviated).day()
+    }
+
     private func stepper(_ symbol: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -1027,11 +1041,6 @@ struct SettingsView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private func saveRemote() {
-        GitSync.setRemote(remote.trimmingCharacters(in: .whitespacesAndNewlines), in: store.dir)
-        store.requestSync?()
     }
 
     /// The one row that changes with `store.update`. Everything here is a plain Form row —
@@ -1088,68 +1097,96 @@ struct SettingsView: View {
 
     private func refreshGitInfo() {
         DispatchQueue.global().async {
+            // ponytail: ahead/behind comes from store.pending — every sync already fills it
             let url = GitSync.remoteURL(in: store.dir)
-            let ab = GitSync.aheadBehind(in: store.dir)
             DispatchQueue.main.async {
-                // Track the real remote while the field is untouched, so the doctor
-                // switching to HTTPS doesn't leave a stale SSH URL sitting here for
-                // Save/Return to write straight back. Mid-edit text is never clobbered.
-                if remote == shownRemote { remote = url }
-                shownRemote = url
-                aheadBehind = ab
+                remote = url
+                log = SyncLog.entries
             }
         }
     }
 }
 
-/// Sync is failing — say why in plain language and offer the one-click fix.
-/// The diagnosis is deliberately async: `ls-remote` can hang for a long time.
+/// Sync is failing — one card: the cause in plain words, when it last worked and what's
+/// waiting, then a ranked primary/secondary action. The diagnosis is deliberately async:
+/// `ls-remote` can hang for a long time.
 struct FixSyncPanel: View {
     @ObservedObject var store: NoteStore
+    var ahead = 0
     @State private var problem: GitSync.SyncProblem?
     @State private var ghReady = false
     @State private var note: String?
 
+    private var headline: String {
+        switch problem {
+        case nil: return "Checking what went wrong…"
+        case .sshAuth: return "The repo host rejected this Mac's SSH key"
+        case .repoMissing: return "That repository isn't there"
+        case .hostKeyChanged: return "The server's SSH key changed"
+        case .httpsNeedsLogin: return "This HTTPS URL needs a login"
+        default: return "Can't reach the remote"
+        }
+    }
+
+    private var detail: String? {
+        switch problem {
+        case .sshAuth(let key): return "\(URL(fileURLWithPath: key).lastPathComponent) isn't on the account that owns this repo."
+        case .repoMissing: return "Check the URL."
+        case .hostKeyChanged: return "That can be a man-in-the-middle attack — verify the new key with your host before trusting it."
+        case .httpsNeedsLogin: return "Sign in to the gh CLI (`gh auth login`) or use the SSH URL instead."
+        case .offline: return "Network unreachable — GitPad retries every 5 minutes."
+        default: return nil
+        }
+    }
+
+    private var record: String {
+        var parts: [String] = []
+        if let last = UserDefaults.standard.object(forKey: "lastSyncOK") as? Date {
+            parts.append("Last successful sync: \(last.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
+        }
+        if ahead > 0 { parts.append("\(ahead) waiting to push") }
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            switch problem {
-            case nil:
-                Text("Checking what went wrong…").font(.caption).foregroundStyle(.secondary)
-            case .sshAuth(let key):
-                Text("The repo host rejected this Mac's SSH key (\(URL(fileURLWithPath: key).lastPathComponent)).")
-                    .font(.caption)
-                if ghReady {
-                    Button("Switch to HTTPS via GitHub CLI") { switchToHTTPS() }
+        VStack(alignment: .leading, spacing: Space.m) {
+            HStack(spacing: Space.m) {
+                SyncDot(status: .offline)
+                Text(headline).font(.callout.weight(.semibold))
+            }
+            Text([detail, record.isEmpty ? nil : record].compactMap { $0 }.joined(separator: " "))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Space.m) {
+                switch problem {
+                case .sshAuth(let key):
+                    if ghReady {
+                        Button("Switch to HTTPS") { switchToHTTPS() }.buttonStyle(.borderedProminent)
+                    }
+                    Button("Copy public key") {
+                        let pub = (try? String(contentsOfFile: key + ".pub", encoding: .utf8)) ?? ""
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(pub, forType: .string)
+                        note = pub.isEmpty ? "Couldn't read \(key).pub" : "Copied — paste it at your host"
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                    if GitSync.remoteURL(in: store.dir).contains("github.com") {
+                        Link("Add key ↗", destination: URL(string: "https://github.com/settings/ssh/new")!)
+                            .font(.caption)
+                    }
+                case .repoMissing, .httpsNeedsLogin:
+                    Button("Change repository…") { store.screen = .gitSetup }.buttonStyle(.borderedProminent)
+                default:
+                    Button(store.syncing ? "Syncing…" : "Try again") { store.requestSync?() }
+                        .buttonStyle(.borderedProminent).disabled(store.syncing)
                 }
-                Button("Copy public key") {
-                    let pub = (try? String(contentsOfFile: key + ".pub", encoding: .utf8)) ?? ""
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(pub, forType: .string)
-                    note = pub.isEmpty ? "Couldn't read \(key).pub" : "Copied — paste it at your host"
-                }
-                if GitSync.remoteURL(in: store.dir).contains("github.com") {
-                    Link("Add a key on GitHub ↗", destination: URL(string: "https://github.com/settings/ssh/new")!)
-                        .font(.caption)
-                }
-            case .repoMissing:
-                Text("That repository isn't there — check the URL.").font(.caption)
-                Button("Set up sync…") { store.screen = .gitSetup }
-            case .hostKeyChanged:
-                Text("The server's SSH key changed. That can be a man-in-the-middle attack — verify the new key with your host before trusting it.")
-                    .font(.caption).foregroundStyle(.orange)
-            case .httpsNeedsLogin:
-                Text("This HTTPS URL needs a login. Sign in to the gh CLI (`gh auth login`) or use the SSH URL instead.")
-                    .font(.caption)
-            case .offline:
-                Text("Network unreachable — GitPad retries every 5 minutes.").font(.caption)
-            case .noRemote, .ok:
-                EmptyView()
             }
             if let note {
                 Text(note).font(.caption2).foregroundStyle(.secondary)
             }
         }
-        .buttonStyle(.borderless)
+        .padding(.vertical, Space.xxs)
         .onAppear(perform: diagnose)
     }
 

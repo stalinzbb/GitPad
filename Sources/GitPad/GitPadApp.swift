@@ -442,7 +442,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastSyncKick = Date()
         syncQueue.async { [weak self] in
             let hasRemote = GitSync.run(["remote", "get-url", "origin"], in: dir).status == 0
+            let before = GitSync.run(["rev-parse", "HEAD"], in: dir)
             let ok = GitSync.sync(dir: dir)
+            if hasRemote { SyncLog.record(ok: ok, dir: dir, before: before.status == 0 ? before.out : "") }
             let ab = hasRemote ? GitSync.aheadBehind(in: dir) : nil
             DispatchQueue.main.async {
                 self?.statusItem.button?.image = self?.statusImage(alert: hasRemote && !ok)
