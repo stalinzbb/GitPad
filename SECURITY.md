@@ -39,7 +39,12 @@ handed to `hdiutil` over stdin, never on the command line. Ceilings, stated plai
   you are not at the machine, not a compromised session.
 - Notes that existed as plain files before you turned the vault on may survive in APFS local
   snapshots, Time Machine, or a corporate backup agent until those age out.
-- The Keychain item is exactly as safe as your login password.
+- The Keychain item is exactly as safe as your login password. Settings → *Require Touch ID
+  to unlock* (opt-in) closes that gap: the passphrase is then sealed to a Secure Enclave key
+  created with user-presence protection, so releasing it needs Touch ID, or the account
+  password on a Mac without it, and no process running as you — root included — can read
+  it otherwise. The cost is a prompt at launch and after every screen unlock. The sealed
+  blob (`~/Library/Application Support/GitPad/vault.key`) is useless off this Mac's Enclave.
 - There is no recovery. A forgotten passphrase means the notes are gone unless a git remote
   has them.
 

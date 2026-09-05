@@ -263,14 +263,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func lockVault() { store.lockVault() }
+    /// Keychain read (blocks for seconds) or Touch ID sheet, off main; a miss leaves LockedView up.
     @objc func unlockVault() {
-        guard Vault.isEnabled else { return }
-        // The Keychain read blocks for seconds while securityd validates the caller — never
-        // on main, or the panel and hotkey are dead until it returns.
-        syncQueue.async { [weak self] in
-            guard let p = Vault.keychainPassphrase else { return } // miss: LockedView asks
-            DispatchQueue.main.async { self?.store.unlockVault(p) }
+        // Test hook, GITPAD_VAULT only: seed the saved passphrase as the app itself, so the
+        // Keychain ACL trusts this binary — items made by `security` prompt regardless of -A.
+        let env = ProcessInfo.processInfo.environment
+        if env["GITPAD_VAULT"] != nil, let p = env["GITPAD_VAULT_PASS"], !p.isEmpty {
+            syncQueue.async { Vault.savePassphrase(p) } // serial: lands before the read below
         }
+        store.unlockVaultStored()
     }
 
     // double-clicking the app (or `open`) while running shows the panel

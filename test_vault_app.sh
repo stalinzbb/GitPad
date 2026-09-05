@@ -30,8 +30,8 @@ cleanup() {
 trap cleanup EXIT
 fail() { echo "FAIL: $*"; echo "--- app log:"; cat "$TMP/app.log" 2>/dev/null | tail -20; exit 1; }
 mounted() { [ "$(stat -f %d "$NOTES")" != "$(stat -f %d "$TMP")" ]; }
-launch() {
-    GITPAD_DIR="$NOTES" GITPAD_VAULT="$BUNDLE" "$BIN" >>"$TMP/app.log" 2>&1 &
+launch() { # $1 (optional): passphrase to seed into the Keychain AS THE APP on this launch
+    env GITPAD_DIR="$NOTES" GITPAD_VAULT="$BUNDLE" ${1:+GITPAD_VAULT_PASS="$1"} "$BIN" >>"$TMP/app.log" 2>&1 &
     PID=$!
     sleep 3
     kill -0 "$PID" 2>/dev/null || fail "app exited early"
@@ -55,23 +55,31 @@ printf '%s' "$PASS" | hdiutil attach -quiet -stdinpass -nobrowse -mountpoint "$S
 echo "# Seeded note" > "$STAGE/seeded.md"
 hdiutil detach "$STAGE" -quiet
 chmod 500 "$NOTES"
+# The Keychain item must be created BY THE APP: one made with `security add-generic-password`
+# makes macOS show an access prompt to the app even with -A (partition lists), which hangs
+# the read until someone clicks. GITPAD_VAULT_PASS seeds it through Vault.savePassphrase.
 security delete-generic-password -s "$SERVICE" -a vault >/dev/null 2>&1 || true
-# -A: any app may read this test item without a prompt (an ad-hoc dev binary has no stable
-# identity for -T). The item is deleted on exit; the real one is written by GitPad itself.
-security add-generic-password -s "$SERVICE" -a vault -w "$PASS" -A -U
 
-# 1. Keychain auto-unlock at launch → mounted, seeded note visible, today's daily note created inside
-launch
-wait_mounted || fail "not mounted within 90s of launch with Keychain passphrase"
+# 1. First launch seeds the passphrase as the app, then unlocks → mounted, seeded note visible,
+#    today's daily note created inside
+launch "$PASS"
+wait_mounted || fail "not mounted within 90s of first launch"
 sleep 2 # NoteStore.open runs on main after the mount
 [ -f "$NOTES/seeded.md" ] || fail "seeded note missing after unlock"
 ls "$NOTES/Daily"/*.md >/dev/null 2>&1 || fail "no daily note written inside the vault"
+security find-generic-password -s "$SERVICE" -a vault >/dev/null 2>&1 || fail "app did not save the passphrase"
 
 # 2. Quit → applicationShouldTerminate detaches; mountpoint empty and unwritable
 quit
 mounted && fail "still mounted after quit"
 [ -z "$(ls -A "$NOTES")" ] || fail "mountpoint not empty after quit"
 if (echo x > "$NOTES/leak.md") 2>/dev/null; then fail "locked mountpoint is writable"; fi
+
+# 2b. Relaunch with nothing seeded → silent Keychain read of the app's own item → mounted
+launch
+wait_mounted || fail "not mounted within 90s of relaunch from the Keychain"
+quit
+[ -z "$(ls -A "$NOTES")" ] || fail "mountpoint not empty after second quit"
 
 # 3. No Keychain item → launches locked, stays alive, writes nothing
 security delete-generic-password -s "$SERVICE" -a vault >/dev/null

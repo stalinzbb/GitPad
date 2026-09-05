@@ -5,6 +5,16 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+### Features
+
+- **Require Touch ID to unlock the vault** (opt-in, Settings → General → Encrypted
+  vault). The passphrase is sealed to a Secure Enclave key that only releases after
+  Touch ID — or your account password on a Mac without it — so nothing running as
+  you, root included, can read it otherwise. Turning it off prompts once as proof of
+  presence; turning it on needs no typing. Expect a prompt at launch and after every
+  screen unlock; the lock screen gains an "Unlock with Touch ID" button with the
+  passphrase as fallback.
+
 ## [0.11.0] — 2026-09-04
 
 Notes can now be unreadable on disk whenever you're not at the keyboard — for the

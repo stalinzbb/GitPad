@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Opt-in encrypted vault: the notes folder is an AES-256 APFS sparse bundle that macOS
@@ -129,6 +131,7 @@ enum Vault {
         }
         if isMounted, !detach(dir) { return "Vault is busy — nothing was erased" }
         try? fm.removeItem(at: bundle)
+        try? fm.removeItem(at: appSupport) // vault.key, staged updates
         chmod(dir.path, 0o700)
         try? fm.removeItem(at: dir)
         deletePassphrase()
@@ -157,8 +160,52 @@ enum Vault {
         (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [])) ?? []
     }
 
-    // MARK: Keychain — a generic password in the login keychain, so it is exactly as safe
-    // as the login password (SECURITY.md). Only GitPad's own bundle reads it without a prompt.
+    // MARK: Saved passphrase — two stores, one switch.
+    //
+    // Default: a generic password in the login Keychain, read silently; exactly as safe as the
+    // login password (SECURITY.md). Opt-in "Require Touch ID": the passphrase is sealed to a
+    // Secure Enclave key created with `.userPresence`, so decrypting it shows the Touch ID sheet
+    // (or the account password on Macs without Touch ID) and nothing running as you — root
+    // included — can read it without that. The sealed blob lives in a plain file: it is useless
+    // off this Mac's Secure Enclave. The data-protection keychain would be the textbook route,
+    // but on macOS it needs a provisioning profile (a Developer-ID build with just the
+    // entitlements is killed at launch); CryptoKit's Secure Enclave keys need no entitlement.
+    // Every read here may block for seconds or wait on a prompt — never call on main.
+
+    static var touchID: Bool { UserDefaults.standard.bool(forKey: "vaultTouchID") }
+    static var touchIDAvailable: Bool { SecureEnclave.isAvailable }
+    private static let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("GitPad")
+    private static let keyFile = appSupport.appendingPathComponent("vault.key")
+
+    static var storedPassphrase: String? { touchID ? enclavePassphrase : keychainPassphrase }
+
+    static func savePassphrase(_ p: String) {
+        if touchID, saveEnclave(p) { return }
+        if touchID { NSLog("vault: Secure Enclave save failed, falling back to the Keychain") }
+        UserDefaults.standard.set(false, forKey: "vaultTouchID")
+        saveKeychain(p)
+    }
+
+    static func deletePassphrase() {
+        SecItemDelete(item as CFDictionary)
+        try? fm.removeItem(at: keyFile)
+    }
+
+    /// Move the saved passphrase between the two stores. Reading it first means turning
+    /// Touch ID OFF prompts once (proof of presence) and turning it ON needs no typing.
+    static func setTouchID(_ on: Bool) -> String? {
+        guard on != touchID else { return nil }
+        guard let p = storedPassphrase else {
+            return on ? "Couldn't read the saved passphrase" : "Touch ID didn't complete — nothing changed"
+        }
+        deletePassphrase()
+        UserDefaults.standard.set(on, forKey: "vaultTouchID")
+        savePassphrase(p) // falls back to the Keychain (and flips the flag back) if the Enclave refuses
+        return touchID == on ? nil : "Secure Enclave unavailable — kept the Keychain"
+    }
+
+    // Login Keychain
 
     private static let item: [CFString: Any] = [
         kSecClass: kSecClassGenericPassword,
@@ -166,7 +213,7 @@ enum Vault {
         kSecAttrAccount: "vault",
     ]
 
-    static var keychainPassphrase: String? {
+    private static var keychainPassphrase: String? {
         var q = item
         q[kSecReturnData] = true
         q[kSecMatchLimit] = kSecMatchLimitOne
@@ -175,12 +222,49 @@ enum Vault {
         return String(data: d, encoding: .utf8)
     }
 
-    static func savePassphrase(_ p: String) {
+    private static func saveKeychain(_ p: String) {
         SecItemDelete(item as CFDictionary)
         var q = item
         q[kSecValueData] = Data(p.utf8)
         SecItemAdd(q as CFDictionary, nil)
     }
 
-    static func deletePassphrase() { SecItemDelete(item as CFDictionary) }
+    // Secure Enclave. Blob layout: [2-byte len][SE key blob][65-byte ephemeral pubkey][AES-GCM sealed passphrase].
+    // ECIES by hand: the Enclave key only does key agreement, so a throwaway P256 key derives
+    // the AES key, and the same agreement — gated by Touch ID — re-derives it on read.
+
+    private static func saveEnclave(_ p: String) -> Bool {
+        var err: Unmanaged<CFError>?
+        guard let ac = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, .userPresence, &err),
+              let se = try? SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: ac) else { return false }
+        let eph = P256.KeyAgreement.PrivateKey()
+        guard let shared = try? eph.sharedSecretFromKeyAgreement(with: se.publicKey),
+              let sealed = try? AES.GCM.seal(Data(p.utf8), using: symmetric(shared)).combined else { return false }
+        let rep = se.dataRepresentation
+        var blob = Data([UInt8(rep.count >> 8), UInt8(rep.count & 0xff)])
+        blob.append(rep)
+        blob.append(eph.publicKey.x963Representation)
+        blob.append(sealed)
+        try? fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        return (try? blob.write(to: keyFile, options: .atomic)) != nil
+    }
+
+    private static var enclavePassphrase: String? {
+        guard let blob = try? Data(contentsOf: keyFile), blob.count > 2 else { return nil }
+        let n = Int(blob[0]) << 8 | Int(blob[1])
+        guard blob.count > 2 + n + 65 else { return nil }
+        let rep = blob[2 ..< 2 + n], pub = blob[2 + n ..< 2 + n + 65], sealed = blob[(2 + n + 65)...]
+        let ctx = LAContext()
+        ctx.localizedReason = "unlock your notes"
+        guard let se = try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: rep, authenticationContext: ctx),
+              let pubKey = try? P256.KeyAgreement.PublicKey(x963Representation: pub),
+              let shared = try? se.sharedSecretFromKeyAgreement(with: pubKey), // the Touch ID sheet
+              let box = try? AES.GCM.SealedBox(combined: sealed),
+              let plain = try? AES.GCM.open(box, using: symmetric(shared)) else { return nil }
+        return String(data: plain, encoding: .utf8)
+    }
+
+    private static func symmetric(_ s: SharedSecret) -> SymmetricKey {
+        s.hkdfDerivedSymmetricKey(using: SHA256.self, salt: Data(), sharedInfo: Data("gitpad-vault".utf8), outputByteCount: 32)
+    }
 }
