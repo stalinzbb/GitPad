@@ -2108,7 +2108,9 @@ struct MarkdownTextView: NSViewRepresentable {
                                         ofSize: fontSize + EditorMetrics.codeSizeDelta, weight: .regular),
                                      .foregroundColor: theme.code]),
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
-                (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.secondaryLabelColor,
+                // 0.45, a step below secondary (~0.5): a done item should recede further
+                // than the 1.5pt tertiary outline of an item still waiting to be ticked.
+                (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.labelColor.withAlphaComponent(0.45),
                                       .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
                 // hide the raw glyph AND neutralize its fallback-font layout: 0.1pt font +
                 // a kern that pins the advance to the drawn box width, so ☐ and ☑ occupy
