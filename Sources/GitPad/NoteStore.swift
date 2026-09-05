@@ -28,9 +28,17 @@ final class NoteStore: ObservableObject {
     /// worktree shares this app's bundle id, notes dir and defaults with an installed copy,
     /// so without it every test edit lands in the real notes and syncs to the real remote.
     /// Same escape-hatch shape as `GITPAD_DEVICE_NAME` in GitSync.
-    let dir = ProcessInfo.processInfo.environment["GITPAD_DIR"].map { URL(fileURLWithPath: $0) }
+    static let defaultDir = ProcessInfo.processInfo.environment["GITPAD_DIR"].map { URL(fileURLWithPath: $0) }
         ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents/GitPad")
+    let dir = NoteStore.defaultDir
+
+    /// The encrypted vault is unmounted: `dir` is an empty, unwritable directory and the UI
+    /// shows `LockedView`. See `Vault`.
+    @Published var locked = false
+    /// Run a block on the app's serial sync queue — vault mount/unmount must never overlap a
+    /// git process. Set by AppDelegate next to `requestSync`.
+    var onSyncQueue: ((@escaping () -> Void) -> Void)?
 
     @Published var notes: [URL] = []
     @Published var folders: [String] = []
@@ -118,11 +126,46 @@ final class NoteStore: ObservableObject {
     private var lastNew = Date.distantPast
 
     init() {
+        if Vault.isLocked { locked = true } else { open() }
+    }
+
+    /// First read of the notes folder — at launch, and again after every vault unlock.
+    func open() {
+        locked = false
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         backfillDailyTitles() // before refresh()/dailyNote(): nothing is loaded yet, so no buffer to clobber
+        uncacheAll()
         refresh()
         if !UserDefaults.standard.bool(forKey: "onboarded") { screen = .onboarding }
         selected = dailyNote()
+    }
+
+    /// Drop every trace of note content from memory before the volume goes away.
+    private func close() {
+        flushPendingSave() // still mounted here, so the write lands
+        selected = nil; notes = []; folders = []; uncacheAll()
+        locked = true
+    }
+
+    func lockVault() {
+        guard Vault.isEnabled, !locked else { return }
+        close() // its flush → onSaved → backgroundSync is queued BEFORE the detach below
+        onSyncQueue? { Vault.lock() }
+    }
+
+    func unlockVault(_ passphrase: String, done: ((Bool) -> Void)? = nil) {
+        guard Vault.isEnabled else { return }
+        onSyncQueue? { [weak self] in
+            let ok = Vault.unlock(passphrase: passphrase) // "already mounted" counts; checked on the queue so a pending lock can't race it
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if ok {
+                    if self.locked { self.open() }
+                    self.requestSync?()
+                }
+                done?(ok)
+            }
+        }
     }
 
     /// Give every daily note the same date heading, derived from the FILENAME (not today)
@@ -332,7 +375,7 @@ final class NoteStore: ObservableObject {
     /// editor buffer so in-flight edits aren't clobbered.
     func appendToDaily(_ raw: String) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !locked else { return } // locked: the write would silently vanish
         let url = dailyNote()
         if selected?.path == url.path {
             if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }

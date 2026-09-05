@@ -5,13 +5,17 @@ enum GitSync {
     /// SECURITY INVARIANT: no user input is ever interpolated into a shell;
     /// args go straight to execve, so note titles / remote URLs can't inject.
     ///
-    /// Internal rather than private so `Updater` runs ditto/codesign/spctl through this
-    /// same audited primitive. There is exactly one way to start a process in this app.
-    static func exec(_ exe: String, _ args: [String], cwd: URL? = nil) -> (status: Int32, out: String) {
+    /// Internal rather than private so `Updater` and `Vault` run ditto/codesign/hdiutil through
+    /// this same audited primitive. There is exactly one way to start a process in this app.
+    /// `stdin` is for secrets (the vault passphrase): argv is visible to `ps`, a pipe is not.
+    /// Written byte-for-byte — no trailing newline, hdiutil would make it part of the passphrase.
+    static func exec(_ exe: String, _ args: [String], cwd: URL? = nil, stdin: String? = nil) -> (status: Int32, out: String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = args
         if let cwd { p.currentDirectoryURL = cwd }
+        let inPipe = stdin.map { _ in Pipe() }
+        if let inPipe { p.standardInput = inPipe }
         var env = ProcessInfo.processInfo.environment
         env["GIT_TERMINAL_PROMPT"] = "0" // never hang on auth prompts
         // accept-new = trust a host we've never seen, but still hard-fail if a known
@@ -24,6 +28,10 @@ enum GitSync {
         p.standardOutput = pipe
         p.standardError = pipe
         do { try p.run() } catch { return (127, "") }
+        if let stdin, let inPipe { // a passphrase is far below the pipe buffer: write-then-read can't deadlock
+            inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            try? inPipe.fileHandleForWriting.close()
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let out = String(data: data, encoding: .utf8)?

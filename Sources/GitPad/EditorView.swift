@@ -26,7 +26,7 @@ struct EditorView: View {
                 UndoDeleteBanner(store: store)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if !store.pill, store.paletteOpen, store.screen != .onboarding {
+            if !store.pill, store.paletteOpen, store.screen != .onboarding, !store.locked {
                 CommandPalette(store: store)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
@@ -51,6 +51,12 @@ struct EditorView: View {
 
     @ViewBuilder private var screens: some View {
         Group {
+            // One `if`, not a Screen case: a `.locked` case would need a guard at every
+            // `screen = .capture` site. The vault has nothing to route.
+            if store.locked {
+                LockedView(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else {
             switch store.screen {
             case .onboarding:
                 OnboardingView(store: store)
@@ -75,8 +81,10 @@ struct EditorView: View {
                 ConflictView(store: store)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
+            }
         }
         .animation(Motion.screen, value: store.screen)
+        .animation(Motion.screen, value: store.locked)
     }
 }
 
@@ -557,10 +565,79 @@ struct CaptureView: View {
     }
 }
 
+// MARK: - Vault
+
+/// Replaces every screen while the encrypted vault is unmounted (Keychain miss, or the
+/// user chose not to remember the passphrase). See `Vault`.
+struct LockedView: View {
+    @ObservedObject var store: NoteStore
+    @State private var pass = ""
+    @State private var working = false
+    @State private var result: String?
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ChromeBar(store: store, title: "Vault locked", showSettings: false, showSyncDot: false) { EmptyView() }
+            VStack(spacing: 14) {
+                Spacer()
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 44, weight: .light))
+                    .foregroundStyle(.tint)
+                Text("Your notes are encrypted on this Mac.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack(spacing: Space.s) {
+                    SecureField("Passphrase", text: $pass)
+                        .focused($focused)
+                        .fieldStyle(focused: focused)
+                        .frame(width: 200)
+                        .onSubmit(unlock)
+                    Button(working ? "Unlocking…" : "Unlock", action: unlock)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(pass.isEmpty || working)
+                }
+                if let result {
+                    Text(result).font(.caption).foregroundStyle(Color.statusErr)
+                }
+                Spacer()
+                Text("Locks when the screen locks or the Mac sleeps.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.bottom, 24)
+            }
+            .padding()
+        }
+        .onAppear { focused = true }
+    }
+
+    private func unlock() {
+        guard !pass.isEmpty, !working else { return }
+        working = true; result = nil
+        let p = pass
+        store.unlockVault(p) { ok in
+            working = false
+            if ok { // next launch/unlock is silent again; Keychain writes block, keep them off main
+                store.onSyncQueue? { Vault.savePassphrase(p) }
+                pass = ""
+            } else { result = "✗ Wrong passphrase, or the vault is busy" }
+        }
+    }
+}
+
 // MARK: - Settings
 
 struct SettingsView: View {
     @ObservedObject var store: NoteStore
+    @AppStorage("vaultEnabled") private var vaultEnabled = false
+    @State private var vaultPass = ""
+    @State private var vaultPass2 = ""
+    @State private var vaultWorking = false
+    @State private var vaultResult: String?
+    @State private var confirmErase = false
+    @State private var eraseHasRemote = true
+    @FocusState private var vaultPassFocused: Bool
+    @FocusState private var vaultPass2Focused: Bool
+    private var devBuild: Bool { ProcessInfo.processInfo.environment["GITPAD_DIR"] != nil }
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @AppStorage("theme") private var themeID = "System"
@@ -578,6 +655,57 @@ struct SettingsView: View {
     private var remoteChanged: Bool {
         let t = remote.trimmingCharacters(in: .whitespaces)
         return !t.isEmpty && t != shownRemote
+    }
+
+    @ViewBuilder private var vaultSection: some View {
+        Section {
+            if vaultEnabled {
+                LabeledContent("Notes are encrypted at rest") {
+                    Button("Lock now") { store.lockVault() }
+                }
+                Button("Decrypt notes…", role: .destructive) { runVault(Vault.remove) }
+                    .disabled(vaultWorking)
+            } else {
+                SecureField("Passphrase", text: $vaultPass)
+                    .focused($vaultPassFocused).fieldStyle(focused: vaultPassFocused)
+                SecureField("Confirm passphrase", text: $vaultPass2)
+                    .focused($vaultPass2Focused).fieldStyle(focused: vaultPass2Focused)
+                Button(vaultWorking ? "Working…" : "Encrypt notes…") {
+                    let p = vaultPass
+                    runVault { Vault.create(passphrase: p) }
+                }
+                .disabled(vaultPass.count < 8 || vaultPass != vaultPass2 || vaultWorking)
+            }
+            if let vaultResult {
+                Text(vaultResult).font(.caption)
+                    .foregroundStyle(vaultResult.hasPrefix("✓") ? Color.statusOK : Color.statusErr)
+            }
+        } header: {
+            Text("Encrypted vault")
+        } footer: {
+            Text(vaultEnabled
+                 ? "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps; the passphrase is in your login Keychain. Decrypt puts the plain files back."
+                 : "Moves your notes into an AES-256 disk image mounted at the same folder — git sync is unchanged. Locks when the screen locks or the Mac sleeps; the passphrase is kept in your login Keychain. No recovery: a lost passphrase means lost notes unless a remote has them.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .disabled(devBuild)
+    }
+
+    /// Vault ops go through the sync queue so a timer sync can't write mid-copy.
+    private func runVault(_ op: @escaping () -> String?, then: (() -> Void)? = nil) {
+        vaultWorking = true; vaultResult = nil
+        store.flushPendingSave()
+        let queue = store.onSyncQueue ?? { DispatchQueue.global().async(execute: $0) }
+        queue {
+            let err = op()
+            DispatchQueue.main.async {
+                vaultWorking = false
+                vaultResult = err.map { "✗ " + $0 } ?? "✓ Done"
+                vaultPass = ""; vaultPass2 = ""
+                guard err == nil else { return }
+                if let then { then() } else { store.refresh() }
+            }
+        }
     }
 
     private func pendingLabel(_ ab: (ahead: Int, behind: Int)) -> String {
@@ -668,14 +796,31 @@ struct SettingsView: View {
                     }
                     .font(.caption).foregroundStyle(.secondary)
                 }
+                vaultSection
                 Section {
                     Button(role: .destructive) {
                         NSApp.terminate(nil)
                     } label: {
                         Label("Quit GitPad", systemImage: "power")
                     }
+                    // Dragging the app to the Trash can't run code, so this is the only
+                    // path that actually removes the notes from the machine.
+                    Button(role: .destructive) {
+                        eraseHasRemote = GitSync.run(["remote", "get-url", "origin"], in: store.dir).status == 0
+                        confirmErase = true
+                    } label: {
+                        Label("Erase GitPad from this Mac…", systemImage: "trash")
+                    }
+                    .disabled(vaultWorking || devBuild || store.locked)
+                    .alert("Erase GitPad and all notes from this Mac?", isPresented: $confirmErase) {
+                        Button("Erase", role: .destructive) { runVault(Vault.erase) { NSApp.terminate(nil) } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Syncs first, then deletes the notes folder, the encrypted vault, its Keychain entry and settings, and moves GitPad to the Trash. Notes already pushed to your remote are unaffected."
+                             + (eraseHasRemote ? "" : "\n\nNo remote is set: this is the only copy."))
+                    }
                 } footer: {
-                    Text("Also ⌘Q from any screen, or the menu-bar icon.")
+                    Text("Also ⌘Q from any screen, or the menu-bar icon. Deleting the app by hand leaves your notes on disk.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

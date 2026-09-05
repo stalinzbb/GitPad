@@ -106,7 +106,11 @@ offline-first, and yours. No new account, no lock-in.
 fast, tiny, and lets the panel float over other apps the way a launcher does.
 
 **Where are my notes?** `~/Documents/GitPad/`. Delete the app and they're still
-plain Markdown files.
+plain Markdown files. On a machine you don't fully trust (a work laptop), Settings →
+*Encrypt notes…* moves them into an AES-256 disk image mounted at that same path, which
+locks whenever the screen does — see [SECURITY.md](SECURITY.md). To remove everything from a
+Mac, use Settings → *Erase GitPad from this Mac…*; dragging the app to the Trash leaves your
+notes where they are.
 
 ## Contributing
 

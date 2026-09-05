@@ -22,9 +22,33 @@ mostly about what it *doesn't* do.
 
 Your notes are exactly as private as the git remote you point GitPad at. A
 private repo on a host you trust keeps them private; a public repo makes them
-public. GitPad adds no layer of its own — that's the point. Optional
-repo-level encryption (age / git-crypt) is on the roadmap for those who want
-zero trust in the host.
+public. GitPad adds no layer of its own — that's the point.
+
+### Encrypted vault (optional)
+
+Settings → General → *Encrypt notes…* (or the last onboarding step) moves the notes
+folder into an AES-256 APFS sparse bundle (`~/Library/Application Support/GitPad/Vault.sparsebundle`)
+that macOS mounts **at** `~/Documents/GitPad`. Inside, the notes are still plain Markdown
+and the git repo is untouched. The vault is detached whenever the screen locks, the Mac
+sleeps, or GitPad quits: while locked, the folder is empty and unwritable and only ciphertext
+exists on disk. The passphrase is kept in your login Keychain so unlocking is silent; it is
+handed to `hdiutil` over stdin, never on the command line. Ceilings, stated plainly:
+
+- While the vault is unlocked, anything running as you — or as root, e.g. an MDM agent — can
+  read the notes, and screen recording sees what you type. The vault protects the disk when
+  you are not at the machine, not a compromised session.
+- Notes that existed as plain files before you turned the vault on may survive in APFS local
+  snapshots, Time Machine, or a corporate backup agent until those age out.
+- The Keychain item is exactly as safe as your login password.
+- There is no recovery. A forgotten passphrase means the notes are gone unless a git remote
+  has them.
+
+Deleting the app by hand does **not** delete your notes (the plain folder, or the vault
+image). Settings → General → *Erase GitPad from this Mac…* syncs, removes the notes folder,
+the vault image, its Keychain entry and settings, and moves the app to the Trash. It refuses
+to run if the final sync fails, so an unpushed note is never lost. Repo-level encryption
+(age / git-crypt) is deliberately not built in: the vault protects the disk; the remote is
+your choice.
 
 ## Reporting a vulnerability
 
