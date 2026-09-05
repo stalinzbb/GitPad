@@ -479,3 +479,63 @@ struct GlassBackground: NSViewRepresentable {
     }
     func updateNSView(_ v: NSView, context: Context) {}
 }
+
+/// A borderless child window that hosts a SwiftUI card next to a rect inside a text view.
+///
+/// Replaces NSPopover for the two in-text surfaces (selection bar, slash menu): a popover
+/// draws an arrow ("this explains that") and steals key focus, which is exactly wrong for a
+/// toolbar you keep tapping and a menu you keep typing into. This is `floatingCard()` in a
+/// window — the same recipe as the ⌘K palette — so the editor has one card language.
+///
+/// ponytail: no arrow, no auto-flip animation. It clamps into the host window and flips
+/// above/below when there's no room; that's all either caller needs.
+final class FloatingCard {
+    private var panel: NSPanel?
+    private let host = NSHostingController(rootView: AnyView(EmptyView()))
+
+    var isVisible: Bool { panel?.isVisible ?? false }
+
+    /// `rect` is in `view`'s own coordinates. The card sits above it by `gap`, or below when
+    /// the top would leave the host window.
+    func show<C: View>(_ content: C, above rect: NSRect, of view: NSView, gap: CGFloat = 8) {
+        guard let win = view.window else { return }
+        host.rootView = AnyView(content)
+        let panel = panel ?? makePanel()
+        host.view.layoutSubtreeIfNeeded()
+        let size = host.view.fittingSize
+        panel.setContentSize(size)
+
+        // view space → screen space, via the host window
+        let inWin = view.convert(rect, to: nil)
+        let anchor = win.convertToScreen(inWin)
+        let frame = win.frame
+        var x = anchor.minX - size.width / 2 + min(anchor.width, 120) / 2
+        x = min(max(x, frame.minX + Space.xl), frame.maxX - size.width - Space.xl)
+        var y = anchor.maxY + gap
+        if y + size.height > frame.maxY { y = anchor.minY - gap - size.height }
+
+        panel.setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
+        if panel.parent == nil { win.addChildWindow(panel, ordered: .above) }
+        panel.orderFront(nil)
+    }
+
+    func close() {
+        guard let panel else { return }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
+    }
+
+    private func makePanel() -> NSPanel {
+        let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: true)
+        p.contentViewController = host
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = false          // floatingCard() draws its own
+        p.hidesOnDeactivate = true
+        p.level = .popUpMenu
+        p.animationBehavior = .none  // the parent panel is borderless; a system fade flickers
+        panel = p
+        return p
+    }
+}

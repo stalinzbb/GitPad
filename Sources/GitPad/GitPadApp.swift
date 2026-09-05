@@ -443,11 +443,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         syncQueue.async { [weak self] in
             let hasRemote = GitSync.run(["remote", "get-url", "origin"], in: dir).status == 0
             let ok = GitSync.sync(dir: dir)
+            let ab = hasRemote ? GitSync.aheadBehind(in: dir) : nil
             DispatchQueue.main.async {
                 self?.statusItem.button?.image = self?.statusImage(alert: hasRemote && !ok)
                 self?.statusItem.button?.contentTintColor = (ok || !hasRemote) ? nil : .systemOrange
                 if ok && hasRemote { UserDefaults.standard.set(Date(), forKey: "lastSyncOK") }
                 self?.store.syncStatus = !hasRemote ? .noRemote : ok ? .synced(Date()) : .offline
+                self?.store.pending = ab ?? (0, 0)
                 self?.store.syncing = false
                 self?.store.refresh() // pick up files pulled from remote
             }

@@ -113,6 +113,11 @@ final class NoteStore: ObservableObject {
     var applyAppearance: ((NSAppearance.Name?) -> Void)?
     @Published var syncStatus: SyncStatus = .unknown
     @Published var syncing = false
+    /// Commits waiting to move, refreshed by each background sync. Drives the status line's
+    /// "1 to push" — the one fact the old word count wasn't answering.
+    @Published var pending: (ahead: Int, behind: Int) = (0, 0)
+    /// An edit is sitting in the 1s autosave debounce. The status line reads it as "Saving…".
+    @Published var dirty = false
     /// Set by the AppDelegate's release check and by the Settings button. Drives the
     /// status-menu item and the Settings row; never pops anything over the editor.
     @Published var update: Updater.State = .none
@@ -643,6 +648,7 @@ final class NoteStore: ObservableObject {
     }
 
     private func scheduleSave() {
+        dirty = true
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.saveNow() }
         saveWork = work
@@ -659,6 +665,7 @@ final class NoteStore: ObservableObject {
     func saveNow() {
         saveWork?.cancel() // any pending debounce is now redundant (no-op if this IS it)
         saveWork = nil
+        dirty = false
         guard let url = selected else { return }
         try? Self.toMarkdown(text).write(to: url, atomically: true, encoding: .utf8)
         uncache(url) // body changed → search/snippet re-read next time
