@@ -5,6 +5,10 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-09-04
+
+The vault can now demand your fingerprint.
+
 ### Features
 
 - **Require Touch ID to unlock the vault** (opt-in, Settings → General → Encrypted
