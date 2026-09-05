@@ -1,147 +1,102 @@
 import SwiftUI
 
+/// First run, two steps: prove the hotkey + typing, then offer sync. The vault lives in
+/// Settings → Advanced; nothing optional gets its own page here.
 struct OnboardingView: View {
     @ObservedObject var store: NoteStore
     @State private var step = 0
-    @State private var remote = ""
-    @FocusState private var remoteFocused: Bool
     @AppStorage("onboarded") private var onboarded = false
-
-    private var pages: [(symbol: String, title: String, body: String)] { [
-        ("keyboard", "Instant capture",
-         "Press \(Hotkey.display) from anywhere.\nGitPad floats over whatever you're doing."),
-        ("text.badge.checkmark", "Just type",
-         "It saves itself. Type / for commands,\n⌘N for a new note, ⌘L for your library."),
-        ("arrow.triangle.branch", "Sync with git",
-         "Optional. Create a private repo (github.com/new),\npaste its SSH URL, and your notes follow you everywhere.\nUses your existing SSH keys — nothing to log into."),
-        ("lock.shield", "Encrypt on this Mac",
-         "Optional. Keeps your notes in an encrypted disk image\nthat locks with your screen. Good for a work laptop.\nLeave blank to keep plain files."),
-    ] }
-    @State private var testResult: String?
-    @State private var pass = ""
-    @State private var pass2 = ""
-    @FocusState private var passFocused: Bool
-    @FocusState private var pass2Focused: Bool
-    @State private var encrypting = false
-    @State private var vaultResult: String?
-    private var last: Int { pages.count - 1 }
-    private var devBuild: Bool { ProcessInfo.processInfo.environment["GITPAD_DIR"] != nil }
-    private var passInvalid: Bool { !pass.isEmpty && (pass.count < 8 || pass != pass2) }
+    @AppStorage("fontDesign") private var fontDesign = "system"
+    @AppStorage("editorFontSize") private var editorFontSize = 14.0
+    @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(spacing: 14) {
+        Group {
+            if step == 0 { hotkeyStep } else { GitSetupView(store: store, onboarding: finish) }
+        }
+        .animation(Motion.screen, value: step)
+    }
+
+    private var hotkeyStep: some View {
+        VStack(spacing: 0) {
             Spacer()
-            symbol
-            Text(pages[step].title)
+            KeyCaps(combo: Hotkey.display)
+            Text("Notes at the speed of thought")
                 .font(.title2.weight(.semibold))
-            Text(pages[step].body)
-                .font(.callout)
+                .padding(.top, 22)
+            Text("Press it from any app and today's note opens over your work. Type, and it saves itself as a Markdown file in \(store.dir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).")
+                .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            if step == 2 {
-                HStack(spacing: Space.s) {
-                    TextField("git@github.com:you/notes.git", text: $remote)
-                        .focused($remoteFocused)
-                        .fieldStyle(focused: remoteFocused)
-                        .frame(width: 240)
-                    Button("Test") { testConnection() }
-                        .disabled(remote.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                if let result = testResult {
-                    Text(result)
-                        .font(.caption)
-                        .foregroundStyle(result.hasPrefix("✓") ? Color.statusOK : result == "…" ? Color.secondary : Color.statusErr)
-                }
-            }
-            if step == last, !devBuild {
-                VStack(spacing: Space.s) {
-                    SecureField("Passphrase", text: $pass)
-                        .focused($passFocused)
-                        .fieldStyle(focused: passFocused)
-                    SecureField("Confirm passphrase", text: $pass2)
-                        .focused($pass2Focused)
-                        .fieldStyle(focused: pass2Focused)
-                    Text(vaultResult ?? "At least 8 characters. There is no recovery.")
-                        .font(.caption)
-                        .foregroundStyle(vaultResult == nil ? Color.secondary : Color.statusErr)
-                }
-                .frame(width: 240)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 300)
+                .padding(.top, Space.l)
+            // Today's note, for real: what gets typed here stays.
+            MarkdownTextView(text: $store.text, fontSize: CGFloat(editorFontSize),
+                             design: fontDesign, theme: theme)
+                .frame(width: 300, height: 130)
+                .background(Color.primary.opacity(Alpha.inset),
+                            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(Color.cardStroke, lineWidth: 1))
+                .padding(.top, 26)
             Spacer()
             HStack(spacing: 6) {
-                ForEach(0..<pages.count, id: \.self) { i in
-                    Circle()
-                        .fill(i == step ? Color.primary : Color.secondary.opacity(0.3))
+                ForEach(0..<2, id: \.self) { i in
+                    Circle().fill(i == step ? Color.primary : Color.secondary.opacity(0.3))
                         .frame(width: 6, height: 6)
                 }
             }
-            Button(step < last ? "Continue" : encrypting ? "Encrypting…" : "Start writing") {
-                withAnimation(Motion.pop) {
-                    if step < last { step += 1 } else { finish() }
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(step == last && (encrypting || passInvalid))
-            .padding(.bottom, 24)
+            // No .defaultAction here: Return belongs to the editor above.
+            Button("Continue") { withAnimation(Motion.pop) { step = 1 } }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, Space.xxl).padding(.bottom, Space.s)
+            Text("Step 2: sync across Macs (optional)")
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.bottom, 18)
         }
         .padding()
-    }
-
-    @ViewBuilder private var symbol: some View {
-        let img = Image(systemName: pages[step].symbol)
-            .font(.system(size: 44, weight: .light))
-            .foregroundStyle(.tint)
-        Group {
-            if #available(macOS 14.0, *), !Motion.reduce {
-                img.symbolEffect(.bounce, value: step)
-            } else {
-                img
-            }
-        }
-        .id(step)
-        .transition(.scale(scale: 0.6).combined(with: .opacity))
-        .frame(height: 60)
-    }
-
-    private func testConnection() {
-        let url = remote.trimmingCharacters(in: .whitespacesAndNewlines)
-        testResult = "…"
-        DispatchQueue.global().async {
-            let r = GitSync.run(["ls-remote", url], in: store.dir)
-            DispatchQueue.main.async {
-                testResult = r.status == 0 ? "✓ Connected" : "✗ " + GitSync.friendlyError(r.out)
-            }
-        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
     private func finish() {
-        let url = remote.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !url.isEmpty { GitSync.setRemote(url, in: store.dir) }
-        guard !pass.isEmpty, !devBuild else { onboarded = true; store.screen = .capture; return }
-        // The folder already holds today's note (NoteStore.open), so it moves into the vault too.
-        encrypting = true; vaultResult = nil
-        store.flushPendingSave()
-        let queue = store.onSyncQueue ?? { DispatchQueue.global().async(execute: $0) }
-        queue {
-            let err = Vault.create(passphrase: pass)
-            DispatchQueue.main.async {
-                encrypting = false
-                if let err { vaultResult = "✗ " + err; return }
-                pass = ""; pass2 = ""
-                store.refresh()
-                onboarded = true
-                store.screen = .capture
+        onboarded = true
+        store.screen = .capture
+    }
+}
+
+/// The bound hotkey as keycaps: modifiers one glyph each, the key on its own cap.
+struct KeyCaps: View {
+    let combo: String
+    private static let modifiers: Set<Character> = ["⌃", "⌥", "⇧", "⌘"]
+
+    private var caps: [String] {
+        var mods: [String] = []
+        var rest = Substring(combo)
+        while let c = rest.first, Self.modifiers.contains(c) { mods.append(String(c)); rest = rest.dropFirst() }
+        return mods + (rest.isEmpty ? [] : [rest.lowercased()])
+    }
+
+    var body: some View {
+        HStack(spacing: Space.m) {
+            ForEach(caps, id: \.self) { cap in
+                Text(cap)
+                    .font(.system(size: cap.count == 1 ? 18 : 14, weight: .medium))
+                    .padding(.horizontal, cap.count == 1 ? 16 : 26).padding(.vertical, Space.l)
+                    .background(Color.primary.opacity(Alpha.iconHover),
+                                in: RoundedRectangle(cornerRadius: Radius.field, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(Alpha.cardDivider), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.4), radius: 0, y: 2)
             }
         }
     }
 }
 
-/// Step-by-step git sync onboarding, reachable any time from Settings.
+/// Step-by-step git sync guide, reachable any time from Settings — and, with `onboarding`
+/// set, as the second first-run step (no chrome, a "Not now" way out, done on first sync).
 struct GitSetupView: View {
     @ObservedObject var store: NoteStore
+    var onboarding: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var remote = ""
     @FocusState private var remoteFocused: Bool
@@ -153,8 +108,18 @@ struct GitSetupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ChromeBar(store: store, title: "Set up sync", showSettings: false, showSyncDot: false) {
-                ChromeIcon(symbol: ChromeGlyph.back, help: "Back (Esc)") { store.goBack() }
+            if onboarding == nil {
+                ChromeBar(store: store, title: "Set up sync", showSettings: false, showSyncDot: false) {
+                    ChromeIcon(symbol: ChromeGlyph.back, help: "Back (Esc)") { store.goBack() }
+                }
+            } else {
+                Text("Sync across Macs?")
+                    .font(.title2.weight(.semibold))
+                    .padding(.top, 28)
+                Text("Optional. A private git repo carries your notes to every Mac you use.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, Space.s)
             }
 
             VStack(alignment: .leading, spacing: 18) {
@@ -193,11 +158,20 @@ struct GitSetupView: View {
                     .foregroundStyle(r.hasPrefix("✓") ? Color.statusOK : Color.statusErr)
                     .padding(.bottom, 6)
             }
-            Button(working ? "Working…" : "Save & Sync") { saveAndSync() }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(trimmed.isEmpty || working)
+            if let onboarding {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.secondary.opacity(0.3)).frame(width: 6, height: 6)
+                    Circle().fill(Color.primary).frame(width: 6, height: 6)
+                }
+                .padding(.bottom, Space.xxl)
+                HStack(spacing: Space.xl) {
+                    Button("Not now", action: onboarding).disabled(working)
+                    saveButton
+                }
                 .padding(.bottom, 20)
+            } else {
+                saveButton.padding(.bottom, 20)
+            }
         }
         .onAppear {
             DispatchQueue.global().async {
@@ -209,6 +183,13 @@ struct GitSetupView: View {
                 }
             }
         }
+    }
+
+    private var saveButton: some View {
+        Button(working ? "Working…" : "Save & Sync") { saveAndSync() }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+            .disabled(trimmed.isEmpty || working)
     }
 
     private func step(_ n: Int, _ title: String, _ detail: String) -> some View {
@@ -243,6 +224,7 @@ struct GitSetupView: View {
                 result = ok ? "✓ Synced — you're all set" : "✗ Sync failed — try again"
                 working = false
                 store.refresh()
+                if ok, let onboarding { onboarding() } // first run ends inside the editor
             }
         }
     }
