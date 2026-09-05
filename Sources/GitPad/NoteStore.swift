@@ -154,9 +154,20 @@ final class NoteStore: ObservableObject {
     }
 
     func unlockVault(_ passphrase: String, done: ((Bool) -> Void)? = nil) {
+        unlock({ passphrase }, done: done)
+    }
+
+    /// Unlock with the saved passphrase: silent from the Keychain, or the Touch ID sheet.
+    func unlockVaultStored(done: ((Bool) -> Void)? = nil) {
+        unlock({ Vault.storedPassphrase }, done: done)
+    }
+
+    /// `passphrase` runs ON the queue, after the mounted check — so wake + screen-unlock firing
+    /// together cost one Touch ID prompt, not two, and a pending lock can't race the mount.
+    private func unlock(_ passphrase: @escaping () -> String?, done: ((Bool) -> Void)?) {
         guard Vault.isEnabled else { return }
         onSyncQueue? { [weak self] in
-            let ok = Vault.unlock(passphrase: passphrase) // "already mounted" counts; checked on the queue so a pending lock can't race it
+            let ok = Vault.isMounted || (passphrase().map { Vault.unlock(passphrase: $0) } ?? false)
             DispatchQueue.main.async {
                 guard let self else { return }
                 if ok {

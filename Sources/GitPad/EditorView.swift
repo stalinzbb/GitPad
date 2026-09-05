@@ -586,6 +586,18 @@ struct LockedView: View {
                     .foregroundStyle(.tint)
                 Text("Your notes are encrypted on this Mac.")
                     .font(.callout).foregroundStyle(.secondary)
+                if Vault.touchID {
+                    Button(working ? "Unlocking…" : "Unlock with Touch ID") {
+                        working = true; result = nil
+                        store.unlockVaultStored { ok in
+                            working = false
+                            if !ok { result = "✗ Touch ID didn't complete — try again, or type the passphrase" }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(working)
+                    Text("or type your passphrase").font(.caption).foregroundStyle(.secondary)
+                }
                 HStack(spacing: Space.s) {
                     SecureField("Passphrase", text: $pass)
                         .focused($focused)
@@ -629,6 +641,7 @@ struct LockedView: View {
 struct SettingsView: View {
     @ObservedObject var store: NoteStore
     @AppStorage("vaultEnabled") private var vaultEnabled = false
+    @AppStorage("vaultTouchID") private var vaultTouchID = false
     @State private var vaultPass = ""
     @State private var vaultPass2 = ""
     @State private var vaultWorking = false
@@ -663,6 +676,14 @@ struct SettingsView: View {
                 LabeledContent("Notes are encrypted at rest") {
                     Button("Lock now") { store.lockVault() }
                 }
+                if Vault.touchIDAvailable {
+                    // Bound to the store switch, not the default directly: the move reads the
+                    // current copy (a Touch ID prompt when turning off) and can refuse.
+                    Toggle("Require Touch ID to unlock", isOn: Binding(
+                        get: { vaultTouchID },
+                        set: { on in runVault({ Vault.setTouchID(on) }) {} }))
+                        .disabled(vaultWorking)
+                }
                 Button("Decrypt notes…", role: .destructive) { runVault(Vault.remove) }
                     .disabled(vaultWorking)
             } else {
@@ -684,7 +705,9 @@ struct SettingsView: View {
             Text("Encrypted vault")
         } footer: {
             Text(vaultEnabled
-                 ? "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps; the passphrase is in your login Keychain. Decrypt puts the plain files back."
+                 ? (vaultTouchID
+                    ? "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps. The passphrase is sealed by the Secure Enclave and released only after Touch ID (or your password on a Mac without it) — expect a prompt at launch and after every screen unlock. Decrypt puts the plain files back."
+                    : "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps; the passphrase is in your login Keychain, so unlocking is silent. Decrypt puts the plain files back.")
                  : "Moves your notes into an AES-256 disk image mounted at the same folder — git sync is unchanged. Locks when the screen locks or the Mac sleeps; the passphrase is kept in your login Keychain. No recovery: a lost passphrase means lost notes unless a remote has them.")
                 .font(.caption).foregroundStyle(.secondary)
         }
