@@ -5,6 +5,47 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-04
+
+Notes can now be unreadable on disk whenever you're not at the keyboard — for the
+work laptop you don't fully trust.
+
+### Features
+
+- **Encrypted vault (opt-in).** Settings → General → *Encrypt notes…* moves your
+  notes folder into an AES-256 disk image that macOS mounts at the same path,
+  `~/Documents/GitPad`. Inside, notes are still plain Markdown and git sync is
+  unchanged. The vault detaches whenever the screen locks, the Mac sleeps, or
+  GitPad quits: while locked, the folder is empty and unwritable and only
+  ciphertext exists on disk. The passphrase lives in your login Keychain so
+  unlocking is silent; if it's missing, GitPad shows a lock screen and asks.
+  Native `hdiutil` and Security.framework — no dependencies, no new file format.
+  Existing notes are moved in and the plain copies deleted; *Decrypt notes…*
+  reverses it. (#50)
+- **Onboarding can encrypt from the first note.** An optional last page sets a
+  passphrase so a fresh install on a work machine never writes plaintext. (#50)
+- **Erase GitPad from this Mac.** Dragging an app to the Trash can't run code, so
+  it never deleted your notes. The new Settings button does: it syncs first and
+  refuses to continue if that push fails, then removes the notes folder, the
+  vault, its Keychain entry and settings, and moves the app to the Trash. (#50)
+
+### Security
+
+- SECURITY.md states the vault's ceilings plainly: while unlocked, anything running
+  as you can read the notes; notes that were plain before you enabled the vault
+  may survive in APFS snapshots or backups; the Keychain item is exactly as safe as
+  your login password; there is no recovery beyond your git remote. The passphrase
+  reaches `hdiutil` over stdin, never on the command line.
+
+### Under the hood
+
+- Keychain reads run off the main thread — `SecItemCopyMatching` blocks for
+  several seconds while securityd validates the caller, which froze the panel at
+  launch during testing.
+- `test_vault.sh` (disk-image mechanics, ciphertext-only on disk) and
+  `test_vault_app.sh` (the real binary: Keychain auto-unlock, detach on quit,
+  a locked launch writes nothing) join `test_gitsync.sh`.
+
 ## [0.10.0] — 2026-08-01
 
 GitPad can update itself now — and every theme finally reaches every control.
