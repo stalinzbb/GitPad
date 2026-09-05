@@ -488,80 +488,147 @@ struct CaptureView: View {
     @AppStorage("fontDesign") private var fontDesign = "system"
     @AppStorage("editorFontSize") private var editorFontSize = 14.0
     @Environment(\.theme) private var theme
-    @State private var nudgeDismissed = false
 
     var body: some View {
         VStack(spacing: 0) {
-            ChromeBar(store: store,
-                      title: store.selected.map { store.title(for: $0) } ?? "",
-                      subtitle: store.selected.map { subtitle(for: $0) }) {
-                HStack(spacing: 2) {
-                    ChromeIcon(symbol: ChromeGlyph.library, help: "Library (⌘L)") { store.screen = .library }
-                    ChromeIcon(symbol: ChromeGlyph.newNote, help: "New note (⌘N)") { store.newNote() }
-                }
-            }
-
-            if let since = staleSince {
-                HStack(spacing: 6) {
-                    Text("Sync hasn't worked since \(since.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    Button("Fix") { store.openSettings() }
-                        .font(.caption2).buttonStyle(.borderless)
-                    Spacer(minLength: 0)
-                    Button { nudgeDismissed = true } label: { Image(systemName: "xmark").font(.caption2) }
-                        .buttonStyle(.borderless).foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 14).padding(.bottom, 6)
-            }
-
+            header
             MarkdownTextView(text: $store.text,
                              fontSize: CGFloat(editorFontSize),
                              design: fontDesign,
                              theme: theme)
-
-            bottomBar
+            statusLine
         }
         // ⌘N/⌘L/⌘S/⌘⌫/⌘M/⌘, are handled by the main-menu "Note" submenu in AppDelegate,
         // so they work from every screen — not just here.
     }
 
-    /// A live word count and pin — the two things you want *while writing*. Move and delete
-    /// deliberately don't live here: they're filing, not writing, and a destructive control
-    /// one slip away from the text is the wrong trade. Both stay on every Library row's ⋯
-    /// menu, plus ⌘⌫ and the ⌘K palette. The header stays 42pt.
-    private var bottomBar: some View {
+    /// Not `ChromeBar`: the editor's header says *where you are*, not what the note is
+    /// called — the H1 in the text below is already the title, and repeating it at 11pt
+    /// spent the centre slot on a duplicate. Every other screen keeps ChromeBar, whose
+    /// centred label names a destination the content can't.
+    private var header: some View {
+        NavBar {
+            Button { store.screen = .library } label: {
+                HStack(spacing: Space.xs) {
+                    Image(systemName: "doc.text").iconSlot()
+                    Text(breadcrumb).font(.caption).lineLimit(1)
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Library (⌘L)")
+        } center: {
+            EmptyView()
+        } right: {
+            HStack(spacing: Space.xxs) {
+                if !store.conflicts.isEmpty {
+                    ChromeIcon(symbol: ChromeGlyph.conflict, help: "Two Macs edited the same note — review",
+                               tint: .orange) { store.screen = .conflicts }
+                }
+                ChromeIcon(symbol: ChromeGlyph.newNote, help: "New note (⌘N)") { store.newNote() }
+                ChromeIcon(symbol: "magnifyingglass", help: "Search notes (⌘K)") { store.searchNotes() }
+                overflowMenu
+            }
+        }
+    }
+
+    /// Settings · Minimize · Close were three permanent glyphs for actions the keyboard
+    /// already owns (⌘, · ⌘M · Esc). One menu, and the header gets its width back.
+    private var overflowMenu: some View {
+        Menu {
+            if let sel = store.selected {
+                Button(store.isPinned(sel) ? "Unpin Note" : "Pin Note") { store.togglePin(sel) }
+            }
+            Text("\(wordCount) words")
+            Divider()
+            Button("Settings") { store.openSettings() }
+            Button("Minimize to Pill") { store.setPill?(true) }
+            Button("Close") { store.onHide?() }
+        } label: {
+            Image(systemName: "ellipsis").iconSlot()
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .foregroundStyle(.secondary)
+        .frame(width: ChromeIcon.side)
+        .help("More")
+    }
+
+    /// Location, in the same 11pt secondary the old title used: folder, then the note's
+    /// own context (a daily note's day, otherwise its date).
+    private var breadcrumb: String {
+        guard let sel = store.selected else { return "GitPad" }
+        let folder = store.folder(of: sel) ?? "Notes"
+        return "\(folder) › \(context(for: sel))"
+    }
+
+    private func context(for sel: URL) -> String {
+        let date = store.modified(sel)
+        if Calendar.current.isDateInToday(date) { return "Today" }
+        if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    /// Replaces the word count. This bar sits where the eye lands after typing, so it
+    /// answers the questions typing actually raises — did that save, is it synced, is
+    /// anything stuck — instead of a vanity metric. Word count moved to the ··· menu.
+    ///
+    /// It also absorbs the old stale-sync banner: a broken sync turns this line orange and
+    /// clickable rather than pushing a second strip in above the text.
+    private var statusLine: some View {
         VStack(spacing: 0) {
             SoftDivider()
-            HStack(spacing: 2) {
-                Text("\(wordCount) words")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.leading, 6)
-                Spacer(minLength: 0)
-                if let sel = store.selected {
-                    ChromeIcon(symbol: store.isPinned(sel) ? "pin.fill" : "pin",
-                               help: store.isPinned(sel) ? "Unpin" : "Pin") { store.togglePin(sel) }
+            Button {
+                if needsAttention { store.openSettings() }
+            } label: {
+                HStack(spacing: Space.s) {
+                    SyncDot(status: store.syncStatus)
+                    Text(store.dirty ? "Saving…" : "Saved")
+                    dot
+                    Text(syncLabel)
+                    if pendingLabel != nil {
+                        dot
+                        Text(pendingLabel!)
+                    }
+                    Spacer(minLength: Space.m)
+                    Chip(text: "⌘K", font: .caption2.weight(.medium))
                 }
+                .font(.caption)
+                .foregroundStyle(needsAttention ? Color.statusWarn : .secondary)
+                .lineLimit(1)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 8).padding(.vertical, 2)
+            .buttonStyle(.plain)
+            .disabled(!needsAttention)
+            .help(needsAttention ? "Sync isn't working — open Settings" : store.syncStatus.label)
+            .padding(.horizontal, Space.xxl).padding(.vertical, Space.s)
         }
+    }
+
+    private var dot: some View { Text("·").foregroundStyle(.tertiary) }
+
+    private var needsAttention: Bool { store.syncStatus == .offline }
+
+    /// Short forms of `SyncStatus.label` — the long ones are for Settings, where there's room.
+    private var syncLabel: String {
+        switch store.syncStatus {
+        case .unknown: return store.syncing ? "Syncing…" : "Not synced yet"
+        case .noRemote: return "Local only"
+        case .synced(let d): return "Synced \(d.formatted(.relative(presentation: .numeric)))"
+        case .offline: return "Can't reach remote"
+        }
+    }
+
+    private var pendingLabel: String? {
+        var parts: [String] = []
+        if store.pending.ahead > 0 { parts.append("\(store.pending.ahead) to push") }
+        if store.pending.behind > 0 { parts.append("\(store.pending.behind) to pull") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private var wordCount: Int {
         store.text.split(whereSeparator: \.isWhitespace).count
-    }
-
-    /// Nag only when sync is *broken*: a deliberate local-only setup (.noRemote) never nags.
-    private var staleSince: Date? {
-        guard !nudgeDismissed, store.syncStatus == .offline,
-              let last = UserDefaults.standard.object(forKey: "lastSyncOK") as? Date,
-              Date().timeIntervalSince(last) > 86_400 else { return nil }
-        return last
-    }
-
-    private func subtitle(for sel: URL) -> String {
-        let date = store.modified(sel).formatted(.dateTime.month(.abbreviated).day())
-        if let f = store.folder(of: sel) { return "\(f) · \(date)" }
-        return date
     }
 }
 
@@ -1794,7 +1861,9 @@ struct MarkdownTextView: NSViewRepresentable {
         // Highlight only — no .foregroundColor. AppKit's default recolors selected glyphs,
         // which un-hides the `.clear` backing markers ("2." showing under the drawn "b.").
         // Keeping stored colors is also what Notes/Xcode do.
-        tv.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
+        // Themed, not `selectedTextBackgroundColor`: that's the OS accent, so Nord and
+        // Dracula selected their own text in system blue over a themed surface.
+        tv.selectedTextAttributes = [.backgroundColor: theme.accent.withAlphaComponent(0.32)]
         tv.delegate = context.coordinator
         storage.delegate = context.coordinator
         context.coordinator.textView = tv
@@ -1818,6 +1887,7 @@ struct MarkdownTextView: NSViewRepresentable {
             // updateNSView from re-highlighting the entire document
             context.coordinator.themeID = theme.id
             tv.font = Coordinator.baseFont(fontSize, design)
+            tv.selectedTextAttributes = [.backgroundColor: theme.accent.withAlphaComponent(0.32)]
             context.coordinator.highlight(storage, range: NSRange(location: 0, length: storage.length))
         }
         if tv.string != text {
@@ -1843,7 +1913,11 @@ struct MarkdownTextView: NSViewRepresentable {
         var design: String = "system"
         var themeID: String = "System"
         private var slashLocation: Int?
-        private let actionPopover = NSPopover()
+        private let actionCard = FloatingCard()
+        private let slashCard = FloatingCard()
+        private var slashItems: [SlashCommand] = []
+        private var slashIndex = 0
+        private var slashMonitor: Any?
 
         init(_ parent: MarkdownTextView) {
             self.parent = parent
@@ -1883,7 +1957,7 @@ struct MarkdownTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
-            maybeShowSlashMenu(tv)
+            updateSlashMenu(tv)
         }
 
         // MARK: paragraph-scoped highlighting
@@ -2283,72 +2357,145 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         // MARK: slash commands
-        private func maybeShowSlashMenu(_ tv: NSTextView) {
-            let caret = tv.selectedRange().location
-            let ns = tv.string as NSString
-            guard caret > 0, caret <= ns.length,
-                  ns.character(at: caret - 1) == UInt16(UnicodeScalar("/").value) else { return }
-            if caret >= 2 {
-                let prev = ns.character(at: caret - 2)
-                guard prev == 32 || prev == 10 || prev == 9 else { return }
-            }
-            slashLocation = caret - 1
 
+        /// The "/" menu. Rebuilt fresh each keystroke so Date/Time preview the value they'd
+        /// actually insert.
+        private static func slashCommands() -> [SlashCommand] {
             let now = Date()
-            let items: [(String, String, String)] = [
-                ("Title", "textformat.size", "# "),
-                ("Subtitle", "textformat", "## "),
-                ("Bullet List", "list.bullet", "- "),
-                ("To-do", "checklist", "☐ "),
-                ("Numbered List", "list.number", "1. "),
-                ("Date", "calendar", now.formatted(date: .abbreviated, time: .omitted) + " "),
-                ("Time", "clock", now.formatted(date: .omitted, time: .shortened) + " "),
-                ("Divider", "minus", "---\n"),
+            return [
+                SlashCommand("Title", "textformat.size", "# "),
+                SlashCommand("Subtitle", "textformat", "## "),
+                SlashCommand("Bullet List", "list.bullet", "- "),
+                SlashCommand("To-do", "checklist", "☐ "),
+                SlashCommand("Numbered List", "list.number", "1. "),
+                SlashCommand("Date", "calendar", now.formatted(date: .abbreviated, time: .omitted) + " "),
+                SlashCommand("Date & Time", "clock",
+                             now.formatted(date: .abbreviated, time: .shortened) + " "),
+                SlashCommand("Divider", "minus", "---\n"),
             ]
-            let menu = NSMenu()
-            for (title, symbol, snippet) in items {
-                let mi = NSMenuItem(title: title, action: #selector(insertSnippet(_:)), keyEquivalent: "")
-                mi.target = self
-                mi.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-                mi.representedObject = snippet
-                menu.addItem(mi)
-            }
-            guard let win = tv.window else { return }
-            let screenRect = tv.firstRect(forCharacterRange: NSRange(location: slashLocation!, length: 1), actualRange: nil)
-            let local = tv.convert(win.convertFromScreen(screenRect), from: nil)
-            menu.popUp(positioning: nil, at: NSPoint(x: local.minX, y: local.maxY), in: tv)
         }
 
-        @objc private func insertSnippet(_ sender: NSMenuItem) {
-            guard let tv = textView, let loc = slashLocation,
-                  let snippet = sender.representedObject as? String,
-                  loc < (tv.string as NSString).length else { return }
-            tv.insertText(snippet, replacementRange: NSRange(location: loc, length: 1))
+        /// Non-modal, unlike the `NSMenu` this replaces: `popUp` runs its own event loop, so
+        /// the caret vanished and the first typed character dismissed it — "/da↩" for Date,
+        /// the thing a slash menu exists for, could never work. Here the "/" and the query
+        /// stay in the document as ordinary text, the card just filters alongside, and any
+        /// character that matches nothing puts the editor straight back to being an editor.
+        private func updateSlashMenu(_ tv: NSTextView) {
+            let ns = tv.string as NSString
+            let caret = tv.selectedRange().location
+
+            if slashLocation == nil {
+                guard caret > 0, caret <= ns.length,
+                      ns.character(at: caret - 1) == UInt16(UnicodeScalar("/").value) else { return }
+                if caret >= 2 {
+                    let prev = ns.character(at: caret - 2)
+                    guard prev == 32 || prev == 10 || prev == 9 else { return }
+                }
+                slashLocation = caret - 1
+                slashIndex = 0
+            }
+
+            guard let loc = slashLocation, caret > loc, caret <= ns.length else { return dismissSlash() }
+            let query = ns.substring(with: NSRange(location: loc + 1, length: caret - loc - 1))
+            // a space or punctuation means you were writing, not choosing
+            guard query.allSatisfy({ $0.isLetter || $0.isNumber }) else { return dismissSlash() }
+
+            let all = Self.slashCommands()
+            slashItems = query.isEmpty ? all
+                : all.filter { NoteStore.fold($0.title).hasPrefix(NoteStore.fold(query))
+                    || NoteStore.fold($0.title).contains(NoteStore.fold(query)) }
+            guard !slashItems.isEmpty else { return dismissSlash() }
+            slashIndex = min(slashIndex, slashItems.count - 1)
+            showSlash(tv, at: loc, query: query)
+        }
+
+        private func showSlash(_ tv: NSTextView, at loc: Int, query: String) {
+            guard let lm = tv.layoutManager, let tc = tv.textContainer else { return }
+            let gr = lm.glyphRange(forCharacterRange: NSRange(location: loc, length: 1),
+                                   actualCharacterRange: nil)
+            var rect = lm.boundingRect(forGlyphRange: gr, in: tc)
+            rect.origin.x += tv.textContainerOrigin.x
+            rect.origin.y += tv.textContainerOrigin.y
+            slashCard.show(SlashMenuCard(items: slashItems, index: slashIndex, query: query,
+                                         onPick: { [weak self] in self?.insertSnippet($0) })
+                            .environment(\.theme, Theme.named(themeID)),
+                           above: rect, of: tv)
+            if slashMonitor == nil {
+                // The text view keeps key focus (that's the point), so ↑↓↩esc have to be
+                // intercepted before it sees them. Same local-monitor pattern as the palette
+                // and HotkeyRecorder, scoped to the card's lifetime.
+                slashMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    guard let self, self.slashCard.isVisible else { return event }
+                    switch Int(event.keyCode) {
+                    case kVK_UpArrow: self.moveSlash(-1); return nil
+                    case kVK_DownArrow: self.moveSlash(1); return nil
+                    case kVK_Return, kVK_ANSI_KeypadEnter, kVK_Tab:
+                        if self.slashItems.indices.contains(self.slashIndex) {
+                            self.insertSnippet(self.slashItems[self.slashIndex])
+                        }
+                        return nil
+                    case kVK_Escape: self.dismissSlash(); return nil
+                    default: return event
+                    }
+                }
+            }
+        }
+
+        private func moveSlash(_ delta: Int) {
+            guard !slashItems.isEmpty, let tv = textView, let loc = slashLocation else { return }
+            slashIndex = min(max(0, slashIndex + delta), slashItems.count - 1)
+            let caret = tv.selectedRange().location
+            let query = (tv.string as NSString).substring(with: NSRange(location: loc + 1,
+                                                                        length: max(0, caret - loc - 1)))
+            showSlash(tv, at: loc, query: query)
+        }
+
+        func dismissSlash() {
             slashLocation = nil
+            slashItems = []
+            slashIndex = 0
+            slashCard.close()
+            if let m = slashMonitor { NSEvent.removeMonitor(m); slashMonitor = nil }
+        }
+
+        /// Replaces "/" and everything typed after it — so the snippet lands where the
+        /// query was, leaving no crumbs.
+        private func insertSnippet(_ cmd: SlashCommand) {
+            guard let tv = textView, let loc = slashLocation else { return }
+            let caret = tv.selectedRange().location
+            let ns = tv.string as NSString
+            guard loc < ns.length, caret >= loc, caret <= ns.length else { return dismissSlash() }
+            tv.insertText(cmd.snippet, replacementRange: NSRange(location: loc, length: caret - loc))
+            dismissSlash()
         }
 
         // MARK: highlight-to-actions mini toolbar
+
+        /// Selection changes fire continuously *during* a drag, so this only closes the bar
+        /// (an empty selection) and refreshes one that's already up. Opening waits for
+        /// `selectionSettled` — mouse-up, or a keyboard selection — which is what makes the
+        /// bar feel like it appears with your hand rather than a quarter-second behind it.
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             refreshTypingAttributes(tv)
             if tv.selectedRange().length == 0 {
-                actionPopover.performClose(nil)
-                return
+                actionCard.close()
+            } else if actionCard.isVisible || NSEvent.pressedMouseButtons == 0 {
+                showActions()
             }
-            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(showActions), object: nil)
-            perform(#selector(showActions), with: nil, afterDelay: 0.25)
         }
 
-        @objc private func showActions() {
+        /// Called from `SmartTextView.mouseUp`: the drag is over, the selection is final.
+        func selectionSettled() {
+            showActions()
+        }
+
+        @objc func showActions() {
             guard let tv = textView, tv.window != nil, tv.selectedRange().length > 0,
                   tv.window?.firstResponder === tv, // no bar while the ⌘K palette holds focus
-                  NSEvent.pressedMouseButtons == 0,
-                  let lm = tv.layoutManager, let tc = tv.textContainer else { return }
-            if actionPopover.contentViewController == nil {
-                // Built once and kept. Nothing here reads \.theme today; anything added that
-                // does would need re-injecting on theme change, since this host never updates.
-                actionPopover.contentViewController = NSHostingController(rootView: ActionBar(coordinator: self))
-                actionPopover.behavior = .transient
+                  let lm = tv.layoutManager, let tc = tv.textContainer else {
+                actionCard.close()
+                return
             }
             // pure view-space geometry — screen-space conversion put the bar far from the text
             let gr = lm.glyphRange(forCharacterRange: tv.selectedRange(), actualCharacterRange: nil)
@@ -2356,11 +2503,47 @@ struct MarkdownTextView: NSViewRepresentable {
             rect.origin.x += tv.textContainerOrigin.x
             rect.origin.y += tv.textContainerOrigin.y
             guard rect.width > 0, rect.height > 0 else { return }
-            // .maxY renders the bar ABOVE the selection — fine low in the window, but for
-            // text near the top it juts outside the borderless panel. Flip to below when
-            // the selection sits in the upper half of the visible viewport.
-            let below = rect.midY < tv.visibleRect.midY // flipped coords: smaller y = higher
-            actionPopover.show(relativeTo: rect, of: tv, preferredEdge: below ? .minY : .maxY)
+            actionCard.show(ActionBar(coordinator: self, active: activeMarks(), block: blockLabel())
+                                .environment(\.theme, Theme.named(themeID)),
+                            above: rect, of: tv)
+        }
+
+        /// Which inline marks the selection already carries — the same two shapes `wrap`
+        /// toggles (marks inside the selection, or wrapped around it), so a lit button and
+        /// what the next tap does can't disagree.
+        func activeMarks() -> Set<String> {
+            guard let tv = textView else { return [] }
+            let ns = tv.string as NSString
+            let sel = tv.selectedRange()
+            guard sel.length > 0 else { return [] }
+            let s = ns.substring(with: sel)
+            var out: Set<String> = []
+            for mark in ["**", "*", "~~", "`"] {
+                let n = (mark as NSString).length
+                let inside = sel.length >= 2 * n && s.hasPrefix(mark) && s.hasSuffix(mark)
+                let around = sel.location >= n && sel.location + sel.length + n <= ns.length
+                    && ns.substring(with: NSRange(location: sel.location - n, length: n)) == mark
+                    && ns.substring(with: NSRange(location: sel.location + sel.length, length: n)) == mark
+                if inside || around { out.insert(mark) }
+            }
+            // "*" matches inside "**" as well; bold wins, exactly as `wrap` resolves it
+            if out.contains("**") { out.remove("*") }
+            return out
+        }
+
+        /// The selection's paragraph type, named — so the block menu says what you're in
+        /// before you open it.
+        func blockLabel() -> String {
+            guard let tv = textView else { return "Body" }
+            let ns = tv.string as NSString
+            let line = ns.substring(with: ns.paragraphRange(for: tv.selectedRange()))
+                .components(separatedBy: "\n").first ?? ""
+            if line.hasPrefix("# ") { return "Title" }
+            if line.hasPrefix("## ") { return "Subtitle" }
+            guard let m = ListLogic.match(line) else { return "Body" }
+            guard m.range(at: 2).location != NSNotFound else { return "Numbered" }
+            let marker = (line as NSString).substring(with: m.range(at: 2))
+            return (marker == "☐" || marker == "☑") ? "Checklist" : "Bullets"
         }
 
         /// Toggle, not just wrap: the mark comes off text that already carries it, so a
@@ -2390,10 +2573,23 @@ struct MarkdownTextView: NSViewRepresentable {
             } else if replaceText(tv, sel, mark + s + mark) {
                 tv.setSelectedRange(NSRange(location: sel.location + n, length: sel.length))
             }
-            actionPopover.performClose(nil)
+            showActions()
         }
 
         func makeTodo() { makeList("☐ ") }
+
+        /// Back to plain text: whichever block marker the paragraph wears, toggling that
+        /// same family off is what `makeList`/`setHeading` already do.
+        func makeBody() {
+            switch blockLabel() {
+            case "Title": setHeading(1)
+            case "Subtitle": setHeading(2)
+            case "Bullets": makeList("- ")
+            case "Numbered": makeList("1. ")
+            case "Checklist": makeTodo()
+            default: break
+            }
+        }
 
         /// Convert the selected paragraphs to a `prefix` list. Every line already in that
         /// marker family → strip back to plain text, so the button toggles. `"1. "` inserts
@@ -2420,7 +2616,7 @@ struct MarkdownTextView: NSViewRepresentable {
             if replaceText(tv, para, out) {
                 tv.setSelectedRange(NSRange(location: para.location, length: (out as NSString).length))
             }
-            actionPopover.performClose(nil)
+            showActions()
         }
 
         /// Set a heading on every selected line; the same level again clears it.
@@ -2448,7 +2644,7 @@ struct MarkdownTextView: NSViewRepresentable {
             if replaceText(tv, para, out) {
                 tv.setSelectedRange(NSRange(location: para.location, length: (out as NSString).length))
             }
-            actionPopover.performClose(nil)
+            showActions()
         }
 
         /// `[selection](url)`. A URL sitting on the clipboard fills the target — otherwise the
@@ -2464,7 +2660,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 let caret = sel.location + (s as NSString).length + 3 + (url as NSString).length
                 tv.setSelectedRange(NSRange(location: caret, length: 0)) // before the ")"
             }
-            actionPopover.performClose(nil)
+            actionCard.close()
         }
 
         /// (leading whitespace, text after any list marker) — so a line converts in place
@@ -2491,34 +2687,118 @@ struct MarkdownTextView: NSViewRepresentable {
 /// The selection bar: inline marks | headings | list conversions | link.
 /// Lives in its own NSHostingController (the popover's), so it inherits nothing from
 /// EditorView's view tree — including the `.tint` that themes every other control.
-struct ActionBar: View {
-    let coordinator: MarkdownTextView.Coordinator
+struct SlashCommand: Identifiable {
+    let id = UUID()
+    let title: String
+    let symbol: String
+    /// What lands in the document. Date/Time bake the value in at build time, which is also
+    /// what the row previews — the old menu inserted a format you couldn't see first.
+    let snippet: String
 
-    /// ChromeIcon, not bespoke buttons: it already carries the house hover background,
-    /// glyph size/weight and tooltip, so the selection menu matches every other control.
-    /// Headings reuse the slash menu's own Title/Subtitle glyphs — same action reached two
-    /// ways shouldn't wear two icons — and the dividers group marks / headings / lists.
-    var body: some View {
-        HStack(spacing: 2) {
-            ChromeIcon(symbol: "bold", help: "Bold") { coordinator.wrap("**") }
-            ChromeIcon(symbol: "italic", help: "Italic") { coordinator.wrap("*") }
-            ChromeIcon(symbol: "strikethrough", help: "Strikethrough") { coordinator.wrap("~~") }
-            ChromeIcon(symbol: "chevron.left.forwardslash.chevron.right",
-                       help: "Inline code") { coordinator.wrap("`") }
-            rule
-            ChromeIcon(symbol: "textformat.size", help: "Title") { coordinator.setHeading(1) }
-            ChromeIcon(symbol: "textformat", help: "Subtitle") { coordinator.setHeading(2) }
-            rule
-            ChromeIcon(symbol: "list.bullet", help: "Bullet list") { coordinator.makeList("- ") }
-            ChromeIcon(symbol: "list.number", help: "Numbered list") { coordinator.makeList("1. ") }
-            ChromeIcon(symbol: "checklist", help: "Checklist") { coordinator.makeTodo() }
-            rule
-            ChromeIcon(symbol: "link", help: "Link") { coordinator.insertLink() }
-        }
-        .padding(.horizontal, 6).padding(.vertical, 4)
+    init(_ title: String, _ symbol: String, _ snippet: String) {
+        self.title = title; self.symbol = symbol; self.snippet = snippet
     }
 
-    private var rule: some View { Divider().frame(height: 14) }
+    /// Only the snippets that insert a literal value are worth previewing; a "- " prefix
+    /// previews itself.
+    var preview: String? { snippet.first.map { $0.isLetter || $0.isNumber } == true ? snippet.trimmingCharacters(in: .whitespaces) : nil }
+}
+
+/// The "/" card. Same row recipe as the ⌘K palette — 18pt glyph slot, callout label,
+/// trailing chip — so the editor has one list language instead of three menus in three
+/// styles.
+struct SlashMenuCard: View {
+    let items: [SlashCommand]
+    let index: Int
+    let query: String
+    let onPick: (SlashCommand) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { i, cmd in
+                HStack(spacing: Space.l) {
+                    Image(systemName: cmd.symbol)
+                        .font(Fonts.chromeGlyph).frame(width: 18).foregroundStyle(.secondary)
+                    label(cmd).font(.callout).lineLimit(1)
+                    Spacer(minLength: Space.m)
+                    if let p = cmd.preview {
+                        Text(p).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, Space.m).padding(.vertical, Space.xs)
+                .rowBackground(selected: i == index)
+                .onTapGesture { onPick(cmd) }
+            }
+            HStack {
+                Text("↑↓ choose · ↩ insert · esc")
+                Spacer(minLength: Space.xl)
+                Text("\(items.count) of 8")
+            }
+            .font(.caption2).foregroundStyle(.tertiary)
+            .padding(.horizontal, Space.m).padding(.top, Space.xs)
+        }
+        .padding(Space.s)
+        .frame(width: 236)
+        .floatingCard()
+    }
+
+    /// Underline the matched prefix, so it's visible that the card is answering what you typed.
+    private func label(_ cmd: SlashCommand) -> Text {
+        guard !query.isEmpty,
+              NoteStore.fold(cmd.title).hasPrefix(NoteStore.fold(query)),
+              query.count <= cmd.title.count else { return Text(cmd.title) }
+        let cut = cmd.title.index(cmd.title.startIndex, offsetBy: query.count)
+        return Text(String(cmd.title[..<cut])).underline() + Text(String(cmd.title[cut...]))
+    }
+}
+
+struct ActionBar: View {
+    let coordinator: MarkdownTextView.Coordinator
+    /// The marks the selection already carries — a lit Bold means the next tap un-bolds.
+    /// Eleven equal glyphs with no state was the bar's real problem: bold-on-bold and
+    /// bold-on-plain looked identical.
+    var active: Set<String> = []
+    /// The selection's paragraph type, named. Five inline marks stay as buttons; the
+    /// block conversions (which act on whole paragraphs, not the selection) collapse into
+    /// this one menu — same actions, a third of the width, and it fits anywhere in a 400pt
+    /// panel instead of clipping past the midpoint.
+    var block: String = "Body"
+
+    var body: some View {
+        HStack(spacing: Space.xxs) {
+            mark("bold", "Bold", "**")
+            mark("italic", "Italic", "*")
+            mark("strikethrough", "Strikethrough", "~~")
+            mark("chevron.left.forwardslash.chevron.right", "Inline code", "`")
+            ChromeIcon(symbol: "link", help: "Link") { coordinator.insertLink() }
+            Divider().frame(height: 14)
+            Menu {
+                Button("Body") { coordinator.makeBody() }
+                Button("Title") { coordinator.setHeading(1) }
+                Button("Subtitle") { coordinator.setHeading(2) }
+                Divider()
+                Button("Bullets") { coordinator.makeList("- ") }
+                Button("Numbered") { coordinator.makeList("1. ") }
+                Button("Checklist") { coordinator.makeTodo() }
+            } label: {
+                Text(block).font(.caption)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .padding(.trailing, Space.xs)
+            .help("Paragraph type")
+        }
+        .padding(.horizontal, Space.s).padding(.vertical, Space.xs)
+        .floatingCard()
+    }
+
+    /// ChromeIcon carries the house hover background, glyph size/weight and tooltip; the
+    /// active fill is the theme's own selection colour, the same one a picked row wears.
+    @ViewBuilder private func mark(_ symbol: String, _ help: String, _ mark: String) -> some View {
+        ChromeIcon(symbol: symbol, help: help) { coordinator.wrap(mark) }
+            .rowBackground(selected: active.contains(mark))
+    }
 }
 
 /// Draws a full-width rule for `---` lines and a real checkbox for ☐/☑
@@ -2609,9 +2889,10 @@ final class DividerLayoutManager: NSLayoutManager {
             c.lineCapStyle = .round; c.lineJoinStyle = .round
             NSColor.white.setStroke(); c.stroke()
         } else {
-            // lighter, thinner outline — the box should recede until it's ticked
-            NSColor.quaternaryLabelColor.setStroke()
-            path.lineWidth = 1.1; path.stroke()
+            // Quaternary is 10% white: on a dark themed surface the empty box all but
+            // disappeared, and in a to-do note the empty box is the primary affordance.
+            NSColor.tertiaryLabelColor.setStroke()
+            path.lineWidth = 1.5; path.stroke()
         }
     }
 }
@@ -2650,5 +2931,13 @@ final class SmartTextView: NSTextView {
             }
         }
         super.mouseDown(with: event)
+    }
+
+    /// The drag is over, so the selection is final — see `Coordinator.selectionSettled`.
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        if selectedRange().length > 0 {
+            (delegate as? MarkdownTextView.Coordinator)?.selectionSettled()
+        }
     }
 }
