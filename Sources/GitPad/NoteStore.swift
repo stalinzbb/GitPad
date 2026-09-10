@@ -129,6 +129,10 @@ final class NoteStore: ObservableObject {
     private var metaCache: [URL: (meta: NoteMeta, mtime: Date)] = [:]
     private var mtimeCache: [URL: Date] = [:]
     private var lastNew = Date.distantPast
+    /// mtime of `selected` as of the last load or save — i.e. the version the editor
+    /// buffer was derived from. Anything else on disk got there behind our back (a sync
+    /// merge, another editor), and the buffer must not be allowed to overwrite it.
+    private var loadedMtime: Date = .distantPast
 
     init() {
         if Vault.isLocked { locked = true } else { open() }
@@ -253,6 +257,15 @@ final class NoteStore: ObservableObject {
         mtimeCache = stamps
         notes = found.sorted { (stamps[$0] ?? .distantPast) > (stamps[$1] ?? .distantPast) }
         if let sel = selected, !notes.contains(where: { $0.path == sel.path }) { selected = notes.first }
+        // A sync merge may have rewritten the open note. With nothing in the debounce the
+        // buffer is just a stale copy: reload it. (A dirty buffer is handled by saveNow.)
+        if let sel = selected, saveWork == nil, Self.stat(sel) != loadedMtime {
+            if let raw = try? String(contentsOf: sel, encoding: .utf8), Self.fromMarkdown(raw) != text {
+                loadSelected()
+            } else {
+                loadedMtime = Self.stat(sel) // same content, only the stamp moved
+            }
+        }
         // first conflict ever: show the explainer once, and only from Capture so it
         // can't yank the screen out from under someone mid-task
         if !conflicts.isEmpty, screen == .capture,
@@ -623,8 +636,11 @@ final class NoteStore: ObservableObject {
         return d
     }
 
+    /// attributesOfItem, not `url.resourceValues`: Foundation caches resource values per URL
+    /// value, so back-to-back writes to one path read the same mtime for the rest of the
+    /// run-loop pass — which hid a sync merge from the buffer-overwrite guard in saveNow.
     private static func stat(_ url: URL) -> Date {
-        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? .distantPast
     }
 
     // MARK: load/save — files keep standard markdown; the editor shows ☐/☑ glyphs
@@ -644,6 +660,7 @@ final class NoteStore: ObservableObject {
         loading = true
         let raw = selected.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
         text = Self.fromMarkdown(raw)
+        loadedMtime = selected.map(Self.stat) ?? .distantPast
         loading = false
     }
 
@@ -667,8 +684,26 @@ final class NoteStore: ObservableObject {
         saveWork = nil
         dirty = false
         guard let url = selected else { return }
-        try? Self.toMarkdown(text).write(to: url, atomically: true, encoding: .utf8)
+        let out = Self.toMarkdown(text)
+        var wroteCopy = false
+        // The file changed underneath the buffer (a sync merge landed while typing). Both
+        // versions are real edits, so keep the other one as a conflict copy — the same
+        // shape GitSync writes — instead of silently overwriting it. Before this check,
+        // one keystroke after a clean merge erased the other Mac's edit for good.
+        if Self.stat(url) != loadedMtime,
+           let disk = try? String(contentsOf: url, encoding: .utf8), disk != out {
+            let date = DateFormatter()
+            date.dateFormat = "yyyy-MM-dd HHmm"
+            let copy = url.deletingLastPathComponent().appendingPathComponent(
+                url.deletingPathExtension().lastPathComponent
+                + " (conflict from another device \(date.string(from: Date()))).md")
+            try? disk.write(to: copy, atomically: true, encoding: .utf8)
+            wroteCopy = true
+        }
+        try? out.write(to: url, atomically: true, encoding: .utf8)
+        loadedMtime = Self.stat(url)
         uncache(url) // body changed → search/snippet re-read next time
+        if wroteCopy { refresh() } // the copy shows up in the library (and Conflicts) now, not next sync
         onSaved?()
     }
 }

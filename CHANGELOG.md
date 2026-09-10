@@ -7,6 +7,11 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ### Fixed
 
+- **A sync can no longer erase the other Mac's edit to the note you have open.** When a
+  merge rewrote the open note on disk, the editor kept its stale copy and the next
+  keystroke saved it over the merged file — silently, with no conflict copy. Now a clean
+  buffer reloads from disk after sync, and a buffer with typing in flight keeps the
+  on-disk version as a "(conflict from another device …)" copy instead of overwriting it.
 - **Update on a Homebrew install actually updates.** The button used to stop at a
   "run brew upgrade" note; it now runs `brew upgrade --cask gitpad` itself, then
   restarts into the new version like a direct-download install does.
