@@ -5,8 +5,21 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-09
+
+The editor says where you are and whether you're saved; settings and first run stop
+asking for setup before you've written a word.
+
 ### Changed
 
+- **The editor has its own header.** A breadcrumb saying which note and folder you're
+  in, New and Search, and one ··· menu — instead of a header that repeated the note's
+  first line and held buttons the keyboard already covers.
+- **Status line instead of a word count:** "Saved · Synced 2m ago · 1 to push". The
+  stale-sync warning folds into its orange state rather than adding a second strip.
+- **Selection bar** shows five inline marks and a paragraph-type menu with the active
+  marks lit, so bold-on-bold no longer looks the same as bold-on-plain. It opens on
+  mouse-up rather than after a delay, and stays put while the selection lives.
 - **First run is two steps, not four.** Step 1 shows the bound hotkey as keycaps over a
   live editor (it's today's note — what you type stays); step 2 is the sync guide with a
   clear "Not now". The vault moved to Settings → Advanced behind one row; the Touch ID
@@ -16,6 +29,14 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 - **Sync tab tells the record, not a verdict:** a problem card with one primary fix,
   the repo as a value with "Change…", this Mac's name, and the last five sync runs
   ("Pushed 2 · pulled 1 from the iMac, Tue 18:02").
+- **Themed text selection** and a more visible unchecked box; a checked item's text now
+  recedes.
+
+### Fixed
+
+- **The slash menu accepts typing.** It ran its own event loop, so any keystroke
+  dismissed it and "/da⏎" for Date could never work. It's now a filtering card, and the
+  "/" and your query stay in the document as ordinary text.
 
 ## [0.12.0] — 2026-09-04
 
