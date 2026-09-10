@@ -129,6 +129,15 @@ enum GitSync {
         // commit authors are how the conflict UI names "the other Mac"
         run(["config", "user.name", deviceName], in: dir)
         run(["config", "user.email", "gitpad@localhost"], in: dir)
+        // Only Markdown ever reaches the remote: a screenshot, a .DS_Store or an .env dropped
+        // into the folder by mistake is never committed, let alone pushed. Per-clone exclude,
+        // not a .gitignore — nothing extra appears in the notes folder. Files a repo already
+        // tracks (a README, say) are unaffected; exclude only governs what's *new*.
+        let exclude = URL(fileURLWithPath: run(["rev-parse", "--git-path", "info/exclude"], in: dir).out,
+                          relativeTo: dir)
+        try? FileManager.default.createDirectory(at: exclude.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? "*\n!*/\n!*.md\n".write(to: exclude, atomically: true, encoding: .utf8)
 
         // 1. commit local changes
         run(["add", "-A"], in: dir)
