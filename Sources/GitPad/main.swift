@@ -325,6 +325,32 @@ if CommandLine.arguments.contains("--selftest") {
     precondition((try? String(contentsOf: live, encoding: .utf8)) == "new", "rollback lost the app")
     try? fm.removeItem(at: sandbox)
 
+    // NoteStore vs sync: a merge that rewrites the *open* note on disk must never be
+    // overwritten by the stale editor buffer. Clean buffer → reload; dirty buffer → the
+    // on-disk version survives as a conflict copy. This was a silent two-Mac data-loss path.
+    let notesDir = fm.temporaryDirectory.appendingPathComponent("gitpad-storetest-\(getpid())")
+    try? fm.removeItem(at: notesDir)
+    setenv("GITPAD_DIR", notesDir.path, 1) // before NoteStore.defaultDir is first touched
+    let store = NoteStore()
+    let note = store.newNote()
+    store.text = "# Mine\nlocal line\n"
+    store.saveNow()
+    try! "# Mine\nlocal line\nremote line\n".write(to: note, atomically: true, encoding: .utf8)
+    store.refresh()
+    precondition(store.text == "# Mine\nlocal line\nremote line\n", "clean buffer not reloaded: \(store.text)")
+    store.text = "# Mine\nlocal line\nremote line\ntyped\n" // dirty: sits in the debounce
+    try! "# Mine\nother mac\n".write(to: note, atomically: true, encoding: .utf8)
+    store.saveNow()
+    precondition((try? String(contentsOf: note, encoding: .utf8)) == "# Mine\nlocal line\nremote line\ntyped\n",
+                 "buffer didn't win the original")
+    precondition(store.conflicts.count == 1
+                 && (try? String(contentsOf: store.conflicts[0], encoding: .utf8)) == "# Mine\nother mac\n",
+                 "on-disk version wasn't kept as a conflict copy")
+    store.text += "more\n"
+    store.saveNow() // disk untouched since our own write → plain save, no second copy
+    precondition(store.conflicts.count == 1, "spurious conflict copy on an ordinary save")
+    try? fm.removeItem(at: notesDir)
+
     print("selftest OK")
     exit(0)
 }
