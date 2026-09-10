@@ -240,7 +240,8 @@ final class NoteStore: ObservableObject {
         var found: [URL] = []
         var dirs: [String] = []
         for item in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
-            if (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            var isDir: ObjCBool = false // no resourceValues here either — see stat()
+            if FileManager.default.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
                 guard item.lastPathComponent != ".git" else { continue }
                 dirs.append(item.lastPathComponent)
                 found += ((try? fm.contentsOfDirectory(at: item, includingPropertiesForKeys: nil)) ?? [])
