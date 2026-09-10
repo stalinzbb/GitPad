@@ -129,9 +129,15 @@ enum Updater {
 
     /// True when this Mac has the cask installed. Homebrew owns the app then, and a
     /// self-update would leave brew's metadata pointing at a version that isn't there.
-    static var isBrewInstall: Bool {
-        ["/opt/homebrew/Caskroom/gitpad", "/usr/local/Caskroom/gitpad"]
-            .contains { FileManager.default.fileExists(atPath: $0) }
+    static var isBrewInstall: Bool { brewExecutable != nil }
+
+    /// The `brew` that owns the cask, found next to its Caskroom. The Caskroom entry is
+    /// only a symlink to /Applications/GitPad.app plus a receipt naming the version, so
+    /// upgrading *through* brew is the one way to move the app and keep that receipt true.
+    private static var brewExecutable: String? {
+        ["/opt/homebrew", "/usr/local"]
+            .first { FileManager.default.fileExists(atPath: "\($0)/Caskroom/gitpad") }
+            .map { "\($0)/bin/brew" }
     }
 
     /// Whether *we* are a real signed release. A dev build isn't, and replacing one with a
@@ -197,11 +203,16 @@ enum Updater {
         }.resume()
     }
 
-    /// Download → verify → swap → relaunch, right now.
+    /// Download → verify → swap → relaunch, right now. A cask install hands the whole
+    /// job to brew instead — same button, same outcome, brew's receipt stays truthful.
     ///
     /// Nothing on disk is touched until the downloaded bundle has passed *every* check,
     /// so any failure leaves the running app exactly as it was.
     static func install(_ r: Release, state: @escaping (State) -> Void) {
+        if let brew = brewExecutable, !devUpdateAllowed {
+            brewUpgrade(brew, state: state)
+            return
+        }
         fetchVerified(r, state: state) { app in
             state(.busy("Installing…"))
             let why = swap(Bundle.main.bundleURL, with: app)
@@ -219,12 +230,44 @@ enum Updater {
     /// installed and produces ad-hoc-signed bundles. It lifts nothing about the
     /// *download*: the hash, the Developer ID chain and notarization are checked with or
     /// without it, because those are what make a downloaded bundle safe to run.
+    private static var devUpdateAllowed: Bool {
+        ProcessInfo.processInfo.environment["GITPAD_ALLOW_DEV_UPDATE"] == "1"
+    }
+
+    /// `brew upgrade --cask gitpad`, then relaunch. Slow — brew refreshes its taps first —
+    /// but it is the only path that leaves brew agreeing with what's in /Applications.
+    /// brew replaces the bundle underneath us; the running executable survives that
+    /// exactly as it survives `swap`. Verified by reading the version back off disk
+    /// rather than trusting brew's exit code: "already up to date" also exits 0.
+    private static func brewUpgrade(_ brew: String, state: @escaping (State) -> Void) {
+        guard !installing else { return }
+        installing = true
+        state(.busy("Upgrading with Homebrew…"))
+        DispatchQueue.global().async {
+            let r = GitSync.exec(brew, ["upgrade", "--cask", "gitpad"])
+            let onDisk = infoValue(Bundle.main.bundleURL, "CFBundleShortVersionString")
+            DispatchQueue.main.async {
+                installing = false
+                guard r.status == 0 else {
+                    let last = r.out.split(separator: "\n").last.map(String.init) ?? ""
+                    state(.failed(last.isEmpty ? "brew upgrade failed" : last))
+                    return
+                }
+                guard onDisk != nil, onDisk != currentVersion else {
+                    state(.failed("Homebrew doesn't have the new version yet — try again later"))
+                    return
+                }
+                relaunch()
+            }
+        }
+    }
+
     private static func refusalReason() -> String? {
-        let testing = ProcessInfo.processInfo.environment["GITPAD_ALLOW_DEV_UPDATE"] == "1"
-        // Machine-wide, not per-bundle: if the cask is installed we hand the job back to
-        // brew rather than desync its receipt. Over-refusing here is the safe direction.
+        let testing = devUpdateAllowed
+        // Machine-wide, not per-bundle: a cask install is brew's to move, never ours —
+        // `install` routes it through brew; staging (auto-update) has no brew equivalent.
         if isBrewInstall, !testing {
-            return "Installed with Homebrew — run: brew upgrade --cask gitpad"
+            return "Installed with Homebrew — use Update"
         }
         if !selfIsDeveloperID, !testing { return "Dev build — install manually" }
         let parent = Bundle.main.bundleURL.deletingLastPathComponent()

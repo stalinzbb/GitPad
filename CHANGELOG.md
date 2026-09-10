@@ -5,6 +5,12 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Update on a Homebrew install actually updates.** The button used to stop at a
+  "run brew upgrade" note; it now runs `brew upgrade --cask gitpad` itself, then
+  restarts into the new version like a direct-download install does.
+
 ## [0.13.0] — 2026-09-09
 
 The editor says where you are and whether you're saved; settings and first run stop
