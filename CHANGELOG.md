@@ -5,6 +5,11 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-09-11
+
+A sync can no longer overwrite the note you have open; Homebrew installs update from the
+button; and the vault, the folder and the remote each got one more guard.
+
 ### Changed
 
 - **Vault: lock when idle.** Settings → Encrypted vault → "Lock when idle" (5 min to 1 h,
@@ -28,7 +33,6 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
   folders via a per-clone exclude (no `.gitignore` in your notes folder). A screenshot, a
   `.DS_Store` or an `.env` dropped into the folder by mistake stays local instead of being
   committed and pushed on the next tick.
-
 - **Conflicts show what differs.** The Conflicts screen highlights the lines that exist
   on only one side, so "Keep Mine / Use Theirs" is a glance, not a read-through.
 
