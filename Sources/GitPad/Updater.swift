@@ -140,6 +140,11 @@ enum Updater {
             .map { "\($0)/bin/brew" }
     }
 
+    /// Anything not signed with the Developer ID is a dev build: ./build.sh (ad-hoc), `swift
+    /// run`, a CI artifact. Tagged in the menu bar and the panel so a locally built copy
+    /// can't be mistaken for the installed release (they share a bundle id and a name).
+    static var isDevBuild: Bool { !selfIsDeveloperID }
+
     /// Whether *we* are a real signed release. A dev build isn't, and replacing one with a
     /// downloaded release would silently discard the developer's local build.
     /// Cached: it shells out, and the answer can't change while we run.

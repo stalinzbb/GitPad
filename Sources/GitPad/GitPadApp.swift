@@ -169,6 +169,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = statusImage(alert: false)
+        if Updater.isDevBuild, let b = statusItem.button { // "dev" beside the glyph, release shows none
+            statusItem.length = NSStatusItem.variableLength
+            b.title = "dev"
+            b.font = .monospacedSystemFont(ofSize: 9, weight: .semibold)
+            b.imagePosition = .imageLeading
+        }
         let menu = NSMenu()
         // Added first so they sit at index 0/1, above everything. Both stay hidden until
         // menuNeedsUpdate sees a release — an empty slot beats shuffling indices later.
