@@ -5,6 +5,13 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Only Markdown reaches the remote.** Sync now ignores everything except `.md` files and
+  folders via a per-clone exclude (no `.gitignore` in your notes folder). A screenshot, a
+  `.DS_Store` or an `.env` dropped into the folder by mistake stays local instead of being
+  committed and pushed on the next tick.
+
 ### Fixed
 
 - **A sync can no longer erase the other Mac's edit to the note you have open.** When a

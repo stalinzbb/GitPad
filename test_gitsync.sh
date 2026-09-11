@@ -164,6 +164,21 @@ grep -rq "do not lose me" "$J" --include='*.md' || { echo "FAIL: reset --hard at
 [ -f "$J/README.md" ] || { echo "FAIL: remote README not merged in"; exit 1; }
 echo "PASS: user content blocks adoption"
 
+# Scenario 9: only Markdown is ever committed — a stray secret or binary never reaches the remote.
+R9="$TMP/remote9.git"; K="$TMP/k"
+git init --bare -q -b main "$R9"
+mkdir -p "$K/Work"
+printf '# Real\n- note\n' > "$K/Work/real.md"
+printf 'TOKEN=hunter2\n' > "$K/.env"
+printf 'binary' > "$K/Work/shot.png"
+: > "$K/.DS_Store"
+git -C "$K" init -q -b main; git -C "$K" remote add origin "$R9"
+"$BIN" --sync "$K" || { echo "FAIL: sync with stray files failed"; exit 1; }
+[ "$(git -C "$K" ls-files)" = "Work/real.md" ] || { echo "FAIL: non-markdown got committed: $(git -C "$K" ls-files)"; exit 1; }
+git -C "$R9" show main:.env >/dev/null 2>&1 && { echo "FAIL: .env reached the remote"; exit 1; }
+[ -f "$K/.env" ] || { echo "FAIL: stray file was deleted, not just ignored"; exit 1; }
+echo "PASS: only markdown reaches the remote"
+
 "$BIN" --selftest >/dev/null || { echo "FAIL: note-meta parser selftest"; exit 1; }
 echo "PASS: note-meta parser (snippet + checklist tally)"
 
