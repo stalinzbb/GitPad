@@ -248,6 +248,20 @@ if CommandLine.arguments.contains("--uitest") {
     (tv, coord) = makeEditor("[x](not a url)\n"); spin()
     precondition(tv.textStorage!.attribute(.link, at: 1, effectiveRange: nil) == nil, "junk target must not be clickable")
 
+    // GITPAD_UITEST_SNAPSHOT=<dir>: render a few editor states to PNG for eyeballing what
+    // the preconditions can't check (placeholders, chips). Never set on CI.
+    if let dir = ProcessInfo.processInfo.environment["GITPAD_UITEST_SNAPSHOT"] {
+        for (name, text) in [("fresh", "# "), ("titled", "# Groceries\n\n"), ("body", "# Groceries\n- milk `2%` and [docs](https://x.y)\n")] {
+            let (tv, _) = makeUndoableEditor(text)
+            tv.frame = NSRect(x: 0, y: 0, width: 400, height: 160)
+            tv.textContainerInset = EditorMetrics.inset
+            spin()
+            let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds)!
+            tv.cacheDisplay(in: tv.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("editor-\(name).png"))
+        }
+    }
+
     print("uitest OK")
     exit(0)
 }
