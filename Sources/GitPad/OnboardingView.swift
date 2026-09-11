@@ -131,7 +131,7 @@ struct GitSetupView: View {
                     }
                     .padding(.leading, Space.gutter + Space.l)
                     .disabled(working)
-                    Text("Prefer your own? Paste an SSH or HTTPS URL below instead.")
+                    Text("Uses your gh login's token, which can reach every repo on your account, not just this one. For the narrowest access, paste an SSH URL below instead.")
                         .font(.caption2).foregroundStyle(.tertiary).padding(.leading, Space.gutter + Space.l)
                 } else {
                     step(1, "Create a private repository",

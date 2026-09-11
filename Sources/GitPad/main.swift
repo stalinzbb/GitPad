@@ -351,6 +351,14 @@ if CommandLine.arguments.contains("--selftest") {
     precondition(store.conflicts.count == 1, "spurious conflict copy on an ordinary save")
     try? fm.removeItem(at: notesDir)
 
+    // Commit author: Settings override beats the Mac's name, blank means the Mac's name.
+    let hostName = Host.current().localizedName ?? "GitPad"
+    UserDefaults.standard.set("  Studio/2:b  ", forKey: "deviceName")
+    precondition(GitSync.deviceName == "Studio-2-b", GitSync.deviceName)
+    UserDefaults.standard.set("   ", forKey: "deviceName")
+    precondition(GitSync.deviceName == hostName, "blank override should fall back to the Mac's name")
+    UserDefaults.standard.removeObject(forKey: "deviceName")
+
     print("selftest OK")
     exit(0)
 }

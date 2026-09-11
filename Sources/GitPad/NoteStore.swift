@@ -366,6 +366,10 @@ final class NoteStore: ObservableObject {
     /// Library's New Note button passes the folder you're browsing.
     @discardableResult
     func newNote(in folder: String? = nil) -> URL {
+        // ⌘N reaches here from the main menu even while the lock screen is up. The write
+        // would vanish into the mode-500 mountpoint and leave `selected` on a file that
+        // doesn't exist; callers ignore the value while locked (the editor is hidden).
+        if locked { return selected ?? dir }
         // debounce: reuse a still-empty scratch note *in the same folder*, or ignore rapid presses
         if let sel = selected, sel.lastPathComponent.hasPrefix("note-"),
            self.folder(of: sel) == folder,
@@ -388,6 +392,7 @@ final class NoteStore: ObservableObject {
     }
 
     func open(_ url: URL) {
+        guard !locked else { return } // status-menu Recent: nothing to load from a detached volume
         selected = url
         screen = .capture
     }
@@ -396,6 +401,7 @@ final class NoteStore: ObservableObject {
     /// `selected` re-reads from disk, which throws away whatever is in the editor buffer
     /// (⌥Space lands here, and it fires far more often than the note actually changes).
     func selectDaily() {
+        guard !locked else { return } // ⌥Space while locked: the lock screen is showing, don't create a phantom
         let daily = dailyNote()
         if selected?.path != daily.path { selected = daily }
     }
@@ -459,7 +465,7 @@ final class NoteStore: ObservableObject {
 
     /// Put the last trashed note back where it came from.
     func undoDelete() {
-        guard let d = lastDeleted else { return }
+        guard let d = lastDeleted, !locked else { return } // keep lastDeleted: undo still works after unlock
         lastDeleted = nil
         let parent = d.original.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
