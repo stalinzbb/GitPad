@@ -70,6 +70,17 @@ gotchas, and things that would surprise a contributor._
 - **Touch ID uses a CryptoKit Secure Enclave key, not the data-protection keychain.** `kSecUseDataProtectionKeychain` returns `errSecMissingEntitlement` from an ad-hoc build, and a Developer-ID build carrying `com.apple.application-identifier` + `keychain-access-groups` without a provisioning profile is killed at launch (exit 137). `SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: .userPresence)` needs no entitlement and works in every build; its `dataRepresentation` is safe in a plain file because it's bound to this Mac's Enclave. Hand-rolled ECIES (ephemeral P256 + HKDF + AES-GCM) because the Enclave key only does key agreement.
 - **Ad-hoc dev builds change signature every rebuild**, so macOS may prompt "GitPad wants to use your confidential information in the Keychain" for the vault passphrase. Signed releases don't. `GITPAD_DIR` disables the vault entirely — a dev build must never attach the real bundle onto a scratch dir.
 
+## Release
+
+`./release.sh` does the whole thing on the signing Mac and ends by calling `./publish.sh`,
+which creates the GitHub pre-release (notes = the CHANGELOG section for the version plus a
+"Verify your download" checksum block), bumps `Casks/gitpad.rb` in `stalinzbb/homebrew-tap`,
+and checks GitHub's zip digest against the local file — the in-app updater refuses a zip
+without one. Every step skips itself when already done, so a failed publish is re-run with
+`./publish.sh` alone. `DRY_RUN=1 ./publish.sh` prints the mutating commands instead.
+The prep PR (version bump + dated CHANGELOG section) must be merged first: `publish.sh`
+refuses without a `## [x.y.z]` section, and `release.sh` reads the version from Info.plist.
+
 ## Verify
 
 - `swift build -c release && ./test_gitsync.sh` — the test drives the real binary through a bare remote: same-line conflict resolution and README/unrelated-histories scenarios.
