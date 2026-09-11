@@ -985,7 +985,7 @@ struct SettingsView: View {
                 } label: {
                     Text(remote).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
                 }
-                LabeledContent("This Mac") { Text(GitSync.deviceName).foregroundStyle(.secondary) }
+                DeviceNameField()
             }
         }
         if !store.conflicts.isEmpty {
@@ -1107,6 +1107,21 @@ struct SettingsView: View {
     }
 }
 
+/// "This Mac": the commit author on the remote. Empty = the Mac's own name.
+/// Takes effect on the next sync (`GitSync.sync` re-applies `user.name` every run).
+private struct DeviceNameField: View {
+    @AppStorage("deviceName") private var name = ""
+    var body: some View {
+        LabeledContent("This Mac") {
+            TextField(Host.current().localizedName ?? "GitPad", text: $name)
+                .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
+                .multilineTextAlignment(.trailing)
+        }
+        Text("How this Mac signs its commits and labels conflict copies. Visible to anyone who can read the repo.")
+            .font(.caption2).foregroundStyle(.tertiary)
+    }
+}
+
 /// Sync is failing — one card: the cause in plain words, when it last worked and what's
 /// waiting, then a ranked primary/secondary action. The diagnosis is deliberately async:
 /// `ls-remote` can hang for a long time.
@@ -1131,6 +1146,7 @@ struct FixSyncPanel: View {
     private var detail: String? {
         switch problem {
         case .sshAuth(let key): return "\(URL(fileURLWithPath: key).lastPathComponent) isn't on the account that owns this repo."
+            + (ghReady ? " Switching to HTTPS pushes with your gh login's token, which can reach every repo on your account." : "")
         case .repoMissing: return "Check the URL."
         case .hostKeyChanged: return "That can be a man-in-the-middle attack — verify the new key with your host before trusting it."
         case .httpsNeedsLogin: return "Sign in to the gh CLI (`gh auth login`) or use the SSH URL instead."

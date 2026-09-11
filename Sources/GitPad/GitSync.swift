@@ -159,8 +159,14 @@ enum GitSync {
     }
 
     /// This Mac's name, used as the git author so conflict copies can say who they came from.
+    /// Settings → Sync → "This Mac" overrides the Mac's own name, which otherwise goes into
+    /// every commit on the remote ("Stalin's MacBook Pro") — a small identity leak on a
+    /// shared or public repo. The env var stays on top for the tests.
     static var deviceName: String {
+        let custom = UserDefaults.standard.string(forKey: "deviceName")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let raw = ProcessInfo.processInfo.environment["GITPAD_DEVICE_NAME"]
+            ?? custom.flatMap { $0.isEmpty ? nil : $0 }
             ?? Host.current().localizedName ?? "GitPad"
         return raw.replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")

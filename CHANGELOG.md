@@ -7,6 +7,13 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ### Changed
 
+- **Name this Mac.** Settings → Sync → "This Mac" sets the commit author and the
+  "conflict from …" label instead of always using the Mac's own name.
+- **The gh shortcut says what it grants.** Onboarding's one-click repo and Fix Sync's
+  "Switch to HTTPS" both note that the gh login token reaches every repo on the account,
+  with SSH as the narrower option.
+- **Nothing writes while the vault is locked.** ⌘N, ⌥Space, Undo Delete and the status
+  menu's Recent list are no-ops until unlock instead of creating phantom notes.
 - **Only Markdown reaches the remote.** Sync now ignores everything except `.md` files and
   folders via a per-clone exclude (no `.gitignore` in your notes folder). A screenshot, a
   `.DS_Store` or an `.env` dropped into the folder by mistake stays local instead of being
