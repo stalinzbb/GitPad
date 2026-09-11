@@ -1,67 +1,31 @@
 #!/usr/bin/env swift
-// Draws Resources/AppIcon-1024.png — the Dock/Finder icon. Run via make-icns.sh.
-// The menu-bar glyph is a *template* SF Symbol instead (see GitPadApp.statusImage),
-// so it adapts to light/dark menu bars; this one is the full-colour app icon.
+// Writes Resources/AppIcon-1024.png from Resources/AppIcon-source.png. Run via make-icns.sh.
+//
+// The source is the designed icon, edge to edge. macOS wants the rounded plate at
+// 824×824 inside a 1024 canvas (a 100pt transparent margin on every side), or it
+// renders visibly larger than every other icon in the Dock. Only that padding
+// happens here — no drawing. The menu-bar glyph is Resources/MenuBarIcon.svg, loaded
+// as a template image (see GitPadApp.statusImage).
 import AppKit
 
-let size = 1024.0
-let img = NSImage(size: NSSize(width: size, height: size))
-img.lockFocus()
-
-// rounded-square plate with a violet gradient
-let inset = size * 0.09
-let plate = NSBezierPath(roundedRect: NSRect(x: inset, y: inset,
-                                             width: size - inset * 2, height: size - inset * 2),
-                         xRadius: size * 0.2237, yRadius: size * 0.2237)
-NSGradient(colors: [NSColor(srgbRed: 0.42, green: 0.31, blue: 0.85, alpha: 1),
-                    NSColor(srgbRed: 0.62, green: 0.36, blue: 0.92, alpha: 1)])?
-    .draw(in: plate, angle: -90)
-
-// page: a white sheet with a folded corner
-let w = size * 0.42, h = size * 0.50
-let x = (size - w) / 2, y = (size - h) / 2
-let fold = size * 0.11
-let page = NSBezierPath()
-page.move(to: NSPoint(x: x, y: y))
-page.line(to: NSPoint(x: x + w, y: y))
-page.line(to: NSPoint(x: x + w, y: y + h - fold))
-page.line(to: NSPoint(x: x + w - fold, y: y + h))
-page.line(to: NSPoint(x: x, y: y + h))
-page.close()
-NSColor.white.setFill()
-page.fill()
-
-// three ruled lines + a checked box, drawn as plain strokes (no font dependency)
-NSColor(srgbRed: 0.42, green: 0.31, blue: 0.85, alpha: 1).setStroke()
-let pad = w * 0.16
-for i in 0..<3 {
-    let ly = y + h * (0.62 - Double(i) * 0.19)
-    let line = NSBezierPath()
-    line.lineWidth = size * 0.022
-    line.lineCapStyle = .round
-    // the bottom line sits beside the checkmark, so it starts further in
-    line.move(to: NSPoint(x: x + pad + [0, 0.16, 0.30][i] * w, y: ly))
-    line.line(to: NSPoint(x: x + w - pad, y: ly))
-    line.stroke()
+let size = 1024.0, plate = 824.0
+guard let src = NSImage(contentsOfFile: "Resources/AppIcon-source.png") else {
+    FileHandle.standardError.write(Data("make-icon: Resources/AppIcon-source.png missing\n".utf8))
+    exit(1)
 }
-let check = NSBezierPath()
-check.lineWidth = size * 0.026
-check.lineCapStyle = .round
-check.lineJoinStyle = .round
-let cy = y + h * 0.24
-check.move(to: NSPoint(x: x + pad, y: cy))
-check.line(to: NSPoint(x: x + pad + w * 0.07, y: cy - w * 0.06))
-check.line(to: NSPoint(x: x + pad + w * 0.17, y: cy + w * 0.08))
-check.stroke()
-
-img.unlockFocus()
-
-let out = URL(fileURLWithPath: "Resources/AppIcon-1024.png")
-try? FileManager.default.createDirectory(at: out.deletingLastPathComponent(),
-                                         withIntermediateDirectories: true)
-guard let tiff = img.tiffRepresentation,
-      let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
-    fatalError("could not render icon")
+let img = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+    let inset = (size - plate) / 2
+    src.draw(in: NSRect(x: inset, y: inset, width: plate, height: plate),
+             from: .zero, operation: .sourceOver, fraction: 1)
+    return true
 }
-try! png.write(to: out)
-print("wrote \(out.path)")
+// draw into a bitmap at exactly 1024 px, independent of the screen's scale
+let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size), pixelsHigh: Int(size),
+                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+NSGraphicsContext.saveGraphicsState()
+NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+img.draw(in: NSRect(x: 0, y: 0, width: size, height: size), from: .zero, operation: .copy, fraction: 1)
+NSGraphicsContext.restoreGraphicsState()
+try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: "Resources/AppIcon-1024.png"))
+print("wrote Resources/AppIcon-1024.png")

@@ -445,18 +445,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Menu-bar glyph. Always a *template* image, so macOS inverts it for light/dark
-    /// menu bars and Increase Contrast for free. The badged variant is the
-    /// colour-blind-safe failure cue; the orange tint is only a secondary hint.
+    /// Menu-bar glyph: Resources/MenuBarIcon.svg (NSImage reads SVG natively since 11.0)
+    /// as a *template* image, so macOS inverts it for light/dark menu bars and Increase
+    /// Contrast for free. The alert variant punches a notch in the bottom-right corner and
+    /// sets a dot in it — the same badge shape SF Symbols use — so the failure cue survives
+    /// colour-blindness; the orange tint is only a secondary hint. SF Symbols remain the
+    /// fallback for a bundle-less `swift run`.
     private func statusImage(alert: Bool) -> NSImage? {
-        let names = alert ? ["note.text.badge.exclamationmark", "exclamationmark.triangle"]
-                          : ["note.text", "square.and.pencil"]
         let label = alert ? "GitPad — sync problem" : "GitPad"
-        let img = names.lazy.compactMap {
-            NSImage(systemSymbolName: $0, accessibilityDescription: label)
-        }.first
-        img?.isTemplate = true
-        if img == nil { statusItem.button?.title = "G" } // last resort: never an invisible item
+        let side: CGFloat = 18
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent("MenuBarIcon.svg"),
+              let glyph = NSImage(contentsOf: url) else {
+            let names = alert ? ["note.text.badge.exclamationmark", "exclamationmark.triangle"]
+                              : ["note.text", "square.and.pencil"]
+            let img = names.lazy.compactMap { NSImage(systemSymbolName: $0, accessibilityDescription: label) }.first
+            img?.isTemplate = true
+            if img == nil { statusItem.button?.title = "G" } // last resort: never an invisible item
+            return img
+        }
+        let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            glyph.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            guard alert, let ctx = NSGraphicsContext.current else { return true }
+            let notch = NSRect(x: rect.maxX - 8, y: rect.minY, width: 8, height: 8) // bottom-right corner
+            ctx.compositingOperation = .destinationOut
+            NSBezierPath(ovalIn: notch).fill()                       // clear a hole in the glyph
+            ctx.compositingOperation = .sourceOver
+            NSBezierPath(ovalIn: notch.insetBy(dx: 2, dy: 2)).fill() // the dot inside it
+            return true
+        }
+        img.isTemplate = true
+        img.accessibilityDescription = label
         return img
     }
 
