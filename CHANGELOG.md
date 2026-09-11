@@ -7,6 +7,10 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ### Changed
 
+- **Vault: lock when idle.** Settings → Encrypted vault → "Lock when idle" (5 min to 1 h,
+  off by default) detaches the vault when nobody has touched the Mac for that long, on top
+  of the existing sleep and screen-lock triggers. Opening GitPad again unlocks the same
+  way a screen unlock does: silently from the Keychain, or with a Touch ID prompt.
 - **Dev builds say so.** A locally built or ad-hoc-signed copy shows "dev" beside the
   menu-bar glyph, a DEV tag in the panel header, and "dev build" on the Settings version
   row, so it can't be mistaken for the installed release.

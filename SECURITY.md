@@ -33,7 +33,7 @@ Settings → General → *Encrypt notes…* (or the last onboarding step) moves 
 folder into an AES-256 APFS sparse bundle (`~/Library/Application Support/GitPad/Vault.sparsebundle`)
 that macOS mounts **at** `~/Documents/GitPad`. Inside, the notes are still plain Markdown
 and the git repo is untouched. The vault is detached whenever the screen locks, the Mac
-sleeps, or GitPad quits: while locked, the folder is empty and unwritable and only ciphertext
+sleeps, GitPad quits, or (opt-in, Settings → *Lock when idle*) nobody has touched the Mac for a chosen number of minutes: while locked, the folder is empty and unwritable and only ciphertext
 exists on disk. The passphrase is kept in your login Keychain so unlocking is silent; it is
 handed to `hdiutil` over stdin, never on the command line. Ceilings, stated plainly:
 

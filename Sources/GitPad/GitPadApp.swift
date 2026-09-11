@@ -113,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var updateItem: NSMenuItem!         // hidden until a check finds a newer release
     var updateSeparator: NSMenuItem!
     var syncTimer: Timer?
+    var idleTimer: Timer?
     var updateTimer: Timer?
     private var lastSyncKick = Date.distantPast
     private var pillDragOrigin: NSRect?
@@ -233,6 +234,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateTimer = Timer.scheduledTimer(withTimeInterval: 21_600, repeats: true) { [weak self] _ in
             self?.checkForUpdates()
         }
+        // Idle lock: sleep and screen lock already detach the vault; this covers the Mac
+        // that stays awake and unlocked at an empty desk. Minute granularity is plenty.
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.lockIfIdle()
+        }
         let ws = NSWorkspace.shared.notificationCenter
         ws.addObserver(self, selector: #selector(syncNow), name: NSWorkspace.didWakeNotification, object: nil)
         // Encrypted vault: gone whenever nobody is at the keyboard. Handlers no-op unless enabled.
@@ -269,6 +275,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func lockVault() { store.lockVault() }
+
+    /// Settings → Encrypted vault → "Lock when idle". 0 = never (the default, so nothing
+    /// changes for existing vaults). System-wide idle, not just GitPad's: someone typing in
+    /// another app is at the keyboard, and the vault should stay open for them.
+    func lockIfIdle() {
+        let minutes = UserDefaults.standard.integer(forKey: "vaultIdleMinutes")
+        guard minutes > 0, Vault.isEnabled, !store.locked else { return }
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState,
+                                                           eventType: CGEventType(rawValue: ~0)!)
+        if idle >= Double(minutes * 60) { store.lockVault() }
+    }
+
+    /// An idle lock gets no screen-unlock notification to re-mount on, so the next
+    /// deliberate open retries the stored passphrase (silent Keychain, or a Touch ID prompt).
+    private func unlockIfLocked() {
+        if store.locked { store.unlockVaultStored() }
+    }
     /// Keychain read (blocks for seconds) or Touch ID sheet, off main; a miss leaves LockedView up.
     @objc func unlockVault() {
         // Test hook, GITPAD_VAULT only: seed the saved passphrase as the app itself, so the
@@ -295,6 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if panel.isKeyWindow {
             panel.orderOut(nil)
         } else {
+            unlockIfLocked()
             if store.screen != .onboarding {
                 store.screen = .capture
                 store.selectDaily() // ⌥Space always lands on today
@@ -348,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Bring the panel to the front (expanding the pill first if collapsed).
     private func showPanel() {
+        unlockIfLocked()
         if store.pill { store.setPill?(false) }
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
