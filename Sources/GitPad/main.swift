@@ -240,8 +240,8 @@ if CommandLine.arguments.contains("--uitest") {
     (tv, coord) = makeEditor("see `x` and [docs](https://example.com/a) here\n")
     spin()
     let st = tv.textStorage!
-    precondition(st.attribute(.backgroundColor, at: 5, effectiveRange: nil) != nil, "no code chip")
-    precondition(st.attribute(.backgroundColor, at: 2, effectiveRange: nil) == nil, "chip leaked onto prose")
+    precondition(st.attribute(codeKey, at: 5, effectiveRange: nil) != nil, "no code chip")
+    precondition(st.attribute(codeKey, at: 2, effectiveRange: nil) == nil, "chip leaked onto prose")
     let linkAt = "see `x` and [".utf16.count
     precondition((st.attribute(.link, at: linkAt, effectiveRange: nil) as? URL)?.host == "example.com", "link text carries no .link")
     precondition(st.attribute(.link, at: linkAt - 1, effectiveRange: nil) == nil, "bracket became a link")
@@ -258,6 +258,8 @@ if CommandLine.arguments.contains("--uitest") {
             ("select-empty-todo", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 7, length: 3)),
             ("caret-before-box", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 7, length: 0)),
             ("caret-after-box", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 9, length: 0)),
+            ("code-chip", "# Notes\nrun `swift build` then `./test.sh` — see [docs](https://x.y)\n", nil),
+            ("multi-select", "# NYC\n☐ Central Park\n☐ Vessel\n", NSRange(location: 8, length: 22)),
         ]
         for (name, text, sel) in cases {
             let (tv, _) = makeUndoableEditor(text)
@@ -431,6 +433,21 @@ if CommandLine.arguments.contains("--selftest") {
     precondition(C.blockStart(before: "☐ words ", snippet: "# ") == nil) // marker + text: ordinary insert
     precondition(C.blockStart(before: "", snippet: "# ") == nil)         // plain line: ordinary insert
     precondition(C.blockStart(before: "☐ ", snippet: "---\n") == nil)    // not a block command
+
+    // A block command typed in front of an existing marker replaces it (no "☐ ☐ x").
+    let br = C.blockReplaceRange
+    precondition(br("/todo☐ Central Park", 0, 5, "☐ ") == NSRange(location: 0, length: 7))   // eats "☐ "
+    precondition(br("  /todo- x", 2, 7, "☐ ") == NSRange(location: 2, length: 7))            // keeps indent
+    precondition(br("  /title- x", 2, 8, "# ") == NSRange(location: 0, length: 10))          // heading drops indent
+    precondition(br("/title# Old", 0, 6, "# ") == NSRange(location: 0, length: 8))           // heading → heading
+    precondition(br("/date☐ x", 0, 5, "Sep 11 ") == NSRange(location: 0, length: 5))         // not a block command
+    precondition(br("word /todo☐ x", 5, 10, "☐ ") == NSRange(location: 5, length: 5))        // text before: plain
+
+    // Inline marks across lines: per line, after the marker; all-wrapped → all unwrapped.
+    precondition(C.wrapLines("- a\n- b\n", "**") == "- **a**\n- **b**\n")
+    precondition(C.wrapLines("- **a**\n- **b**\n", "**") == "- a\n- b\n")
+    precondition(C.wrapLines("# T\n\nbody", "*") == "# *T*\n\n*body*")          // blank line untouched
+    precondition(C.wrapLines("- **a**\n- b", "**") == "- ****a****\n- **b**")   // mixed: wraps (toggle is all-or-nothing)
 
     // Conflict diff: lines unique to each side, by index.
     let d1 = NoteStore.uniqueLines(["# T", "a", "b", "c"], ["# T", "a", "x", "c"])

@@ -569,8 +569,10 @@ struct CaptureView: View {
         .help("More")
     }
 
-    /// Location, in the same 11pt secondary the old title used: folder, then the note's
-    /// own context (a daily note's day, otherwise its date).
+    /// Location, in the same 11pt secondary the old title used: folder, then the note.
+    /// A daily note is named by its day ("Today", "Yesterday", "Sep 9" — from the file's
+    /// date, not the modification date, which made every note edited today say "Today");
+    /// any other note shows its title.
     private var breadcrumb: String {
         guard let sel = store.selected else { return "GitPad" }
         let folder = store.folder(of: sel) ?? "Notes"
@@ -578,10 +580,16 @@ struct CaptureView: View {
     }
 
     private func context(for sel: URL) -> String {
-        let date = store.modified(sel)
-        if Calendar.current.isDateInToday(date) { return "Today" }
-        if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
-        return date.formatted(.dateTime.month(.abbreviated).day())
+        if store.folder(of: sel) == "Daily" {
+            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+            if let date = f.date(from: sel.deletingPathExtension().lastPathComponent) {
+                if Calendar.current.isDateInToday(date) { return "Today" }
+                if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
+                return date.formatted(.dateTime.month(.abbreviated).day())
+            }
+        }
+        let title = store.title(for: sel)
+        return title.isEmpty ? "Untitled" : title
     }
 
     /// Replaces the word count. This bar sits where the eye lands after typing, so it
@@ -606,6 +614,7 @@ struct CaptureView: View {
                         Text(pendingLabel!)
                     }
                     Spacer(minLength: Space.m)
+                    if Updater.isDevBuild { DevTag() }
                     Chip(text: "⌘K", font: .caption2.weight(.medium))
                 }
                 .font(.caption)
@@ -1847,6 +1856,7 @@ struct NoteRow: View {
 
 private let dividerKey = NSAttributedString.Key("gitpadDivider")
 private let checkboxKey = NSAttributedString.Key("gitpadCheckbox") // value: Bool (checked)
+let codeKey = NSAttributedString.Key("gitpadCode")            // inline code span → rounded chip
 private let markerKey = NSAttributedString.Key("gitpadListMarker") // value: String (display marker)
 
 /// Drawn checkbox size and the fixed layout advance the ☐/☑ character occupies, derived
@@ -2204,8 +2214,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 // at a glance; the backticks stay (editable) but recede to tertiary
                 (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(
                                         ofSize: fontSize + EditorMetrics.codeSizeDelta, weight: .regular),
-                                     .foregroundColor: theme.code,
-                                     .backgroundColor: theme.code.withAlphaComponent(0.13)]),
+                                     .foregroundColor: theme.code, codeKey: true]),
                 (re(#"`"#), [.foregroundColor: NSColor.tertiaryLabelColor]),
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
                 // 0.45, a step below secondary (~0.5): a done item should recede further
@@ -2230,7 +2239,9 @@ struct MarkdownTextView: NSViewRepresentable {
 
         func highlight(_ storage: NSTextStorage, range: NSRange) {
             guard range.location + range.length <= storage.length else { return }
-            (storage.layoutManagers.first as? DividerLayoutManager)?.accent = Theme.named(themeID).accent
+            let lmTheme = Theme.named(themeID)
+            (storage.layoutManagers.first as? DividerLayoutManager)?.accent = lmTheme.accent
+            (storage.layoutManagers.first as? DividerLayoutManager)?.code = lmTheme.code
             let (base, list) = rules()
             storage.beginEditing()
             storage.setAttributes(base, range: range)
@@ -2596,10 +2607,36 @@ struct MarkdownTextView: NSViewRepresentable {
             let ns = tv.string as NSString
             guard loc < ns.length, caret >= loc, caret <= ns.length else { return dismissSlash() }
             let para = ns.paragraphRange(for: NSRange(location: loc, length: 0))
-            let before = ns.substring(with: NSRange(location: para.location, length: loc - para.location))
-            let start = Self.blockStart(before: before, snippet: cmd.snippet).map { para.location + $0 } ?? loc
-            tv.insertText(cmd.snippet, replacementRange: NSRange(location: start, length: caret - start))
+            let local = Self.blockReplaceRange(line: ns.substring(with: para), slash: loc - para.location,
+                                               caret: caret - para.location, snippet: cmd.snippet)
+            tv.insertText(cmd.snippet, replacementRange: NSRange(location: para.location + local.location,
+                                                                 length: local.length))
             dismissSlash()
+        }
+
+        /// The paragraph-local range a snippet replaces. Plain case: the "/" and the query.
+        /// Block commands also swallow a marker the slash sits *after* (`blockStart`) or
+        /// *in front of* — "/todo" typed at the start of "☐ Central Park" used to yield two
+        /// boxes; now the old one goes.
+        static func blockReplaceRange(line: String, slash: Int, caret: Int, snippet: String) -> NSRange {
+            let plain = NSRange(location: slash, length: caret - slash)
+            guard blockSnippets.contains(snippet) else { return plain }
+            let ns = line as NSString
+            let before = ns.substring(to: slash)
+            if let start = blockStart(before: before, snippet: snippet) {
+                return NSRange(location: start, length: caret - start)
+            }
+            guard before.trimmingCharacters(in: .whitespaces).isEmpty, caret <= ns.length else { return plain }
+            let rest = ns.substring(from: caret)
+            let restNS = rest as NSString
+            let markerLen: Int
+            if let h = headingPrefix.firstMatch(in: rest, range: NSRange(location: 0, length: restNS.length)) {
+                markerLen = h.range.length
+            } else if let m = ListLogic.match(rest), m.range(at: 1).length == 0 {
+                markerLen = m.range(at: 4).location
+            } else { return plain }
+            let start = snippet.hasPrefix("#") ? 0 : slash // headings never indent
+            return NSRange(location: start, length: caret + markerLen - start)
         }
 
         static let blockSnippets: Set<String> = ["# ", "## ", "- ", "☐ ", "1. "]
@@ -2685,9 +2722,14 @@ struct MarkdownTextView: NSViewRepresentable {
             rect.origin.x += tv.textContainerOrigin.x
             rect.origin.y += tv.textContainerOrigin.y
             guard rect.width > 0, rect.height > 0 else { return }
+            // Above by default (it's where the eye already is); below when the selection is
+            // in the top ~1.5 lines of the visible editor, where "above" would sit on the
+            // title or the header instead of over empty margin.
+            let visible = tv.enclosingScrollView?.documentVisibleRect ?? tv.bounds
+            let below = rect.minY - visible.minY < 48
             actionCard.show(ActionBar(coordinator: self, active: activeMarks(), block: blockLabel())
                                 .environment(\.theme, Theme.named(themeID)),
-                            above: rect, of: tv)
+                            above: rect, of: tv, below: below)
         }
 
         /// Which inline marks the selection already carries — the same two shapes `wrap`
@@ -2700,6 +2742,12 @@ struct MarkdownTextView: NSViewRepresentable {
             guard sel.length > 0 else { return [] }
             let s = ns.substring(with: sel)
             var out: Set<String> = []
+            if s.contains("\n") { // multi-line: lit when every line is wrapped (what `wrap` would strip)
+                for mark in ["**", "*", "~~", "`"]
+                where (Self.wrapLines(s, mark) as NSString).length < (s as NSString).length { out.insert(mark) }
+                if out.contains("**") { out.remove("*") }
+                return out
+            }
             for mark in ["**", "*", "~~", "`"] {
                 let n = (mark as NSString).length
                 let inside = sel.length >= 2 * n && s.hasPrefix(mark) && s.hasSuffix(mark)
@@ -2740,6 +2788,18 @@ struct MarkdownTextView: NSViewRepresentable {
             let s = ns.substring(with: sel)
             let n = (mark as NSString).length
 
+            // Markdown inline marks stop at a paragraph, so a selection spanning lines is
+            // wrapped line by line, after any list marker or heading prefix. Toggle as a
+            // whole: every non-empty line already marked → unmark every line.
+            if s.contains("\n") {
+                let out = Self.wrapLines(s, mark)
+                if replaceText(tv, sel, out) {
+                    tv.setSelectedRange(NSRange(location: sel.location, length: (out as NSString).length))
+                }
+                showActions()
+                return
+            }
+
             if sel.length >= 2 * n, s.hasPrefix(mark), s.hasSuffix(mark) { // marks inside the selection
                 let inner = (s as NSString).substring(with: NSRange(location: n, length: sel.length - 2 * n))
                 if replaceText(tv, sel, inner) {
@@ -2756,6 +2816,32 @@ struct MarkdownTextView: NSViewRepresentable {
                 tv.setSelectedRange(NSRange(location: sel.location + n, length: sel.length))
             }
             showActions()
+        }
+
+        /// Per-line wrap/unwrap for `wrap`. Pure, so the selftest can pin it down.
+        static func wrapLines(_ text: String, _ mark: String) -> String {
+            let lines = text.components(separatedBy: "\n")
+            func parts(_ line: String) -> (prefix: String, body: String) {
+                let ns = line as NSString
+                if let h = headingPrefix.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) {
+                    return (ns.substring(to: h.range.length), ns.substring(from: h.range.length))
+                }
+                if let m = ListLogic.match(line) {
+                    return (ns.substring(to: m.range(at: 4).location), ns.substring(with: m.range(at: 4)))
+                }
+                return ("", line)
+            }
+            let filled = lines.filter { !parts($0).body.trimmingCharacters(in: .whitespaces).isEmpty }
+            let strip = !filled.isEmpty && filled.allSatisfy {
+                let b = parts($0).body
+                return b.count >= 2 * mark.count && b.hasPrefix(mark) && b.hasSuffix(mark)
+            }
+            return lines.map { line -> String in
+                let (prefix, body) = parts(line)
+                guard !body.trimmingCharacters(in: .whitespaces).isEmpty else { return line }
+                if strip { return prefix + String(body.dropFirst(mark.count).dropLast(mark.count)) }
+                return prefix + mark + body + mark
+            }.joined(separator: "\n")
         }
 
         func makeTodo() { makeList("☐ ") }
@@ -3026,7 +3112,24 @@ final class DividerLayoutManager: NSLayoutManager {
         }
     }
 
+    var code: NSColor = .systemPurple
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        // Code chips go under the selection highlight (super), so a selected span still
+        // reads as selected. A rounded rect with a hairline, not a square background
+        // attribute: that's the difference between "highlighted" and "a token".
+        if let storage = textStorage, let container = textContainers.first {
+            let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+            storage.enumerateAttribute(codeKey, in: charRange) { value, range, _ in
+                guard value != nil else { return }
+                let gr = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                var rect = boundingRect(forGlyphRange: gr, in: container).offsetBy(dx: origin.x, dy: origin.y)
+                rect = rect.insetBy(dx: -2, dy: 1)
+                let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+                code.withAlphaComponent(0.10).setFill(); path.fill()
+                code.withAlphaComponent(0.28).setStroke(); path.lineWidth = 0.5; path.stroke()
+            }
+        }
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first else { return }
         let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
@@ -3126,6 +3229,14 @@ final class SmartTextView: NSTextView {
         if ns.length > 0 {
             let pt = convert(event.locationInWindow, from: nil)
             let idx = characterIndexForInsertion(at: pt)
+            // A plain click on link text opens it. Handled here, not left to NSTextView:
+            // in plain-text mode its own link handling never fired for us. The caret can
+            // still be placed inside a link with the arrow keys.
+            if event.clickCount == 1, event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
+               idx < ns.length, let url = attributedString().attribute(.link, at: idx, effectiveRange: nil) as? URL {
+                NSWorkspace.shared.open(url)
+                return
+            }
             let lineR = ns.lineRange(for: NSRange(location: min(idx, ns.length - 1), length: 0))
             let line = ns.substring(with: lineR)
             // hit zone is the glyph itself, not the whole indented prefix — clicks on the

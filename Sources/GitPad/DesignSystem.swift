@@ -497,7 +497,7 @@ final class FloatingCard {
 
     /// `rect` is in `view`'s own coordinates. The card sits above it by `gap`, or below when
     /// the top would leave the host window.
-    func show<C: View>(_ content: C, above rect: NSRect, of view: NSView, gap: CGFloat = 8) {
+    func show<C: View>(_ content: C, above rect: NSRect, of view: NSView, gap: CGFloat = 8, below: Bool = false) {
         guard let win = view.window else { return }
         host.rootView = AnyView(content)
         let panel = panel ?? makePanel()
@@ -511,8 +511,9 @@ final class FloatingCard {
         let frame = win.frame
         var x = anchor.minX - size.width / 2 + min(anchor.width, 120) / 2
         x = min(max(x, frame.minX + Space.xl), frame.maxX - size.width - Space.xl)
-        var y = anchor.maxY + gap
-        if y + size.height > frame.maxY { y = anchor.minY - gap - size.height }
+        var y = below ? anchor.minY - gap - size.height : anchor.maxY + gap
+        if y + size.height > frame.maxY { y = anchor.minY - gap - size.height } // no room above → below
+        if y < frame.minY { y = anchor.maxY + gap }                              // no room below → above
 
         panel.setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
         if panel.parent == nil { win.addChildWindow(panel, ordered: .above) }
