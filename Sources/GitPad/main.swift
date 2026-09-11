@@ -259,6 +259,7 @@ if CommandLine.arguments.contains("--uitest") {
             ("caret-before-box", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 7, length: 0)),
             ("caret-after-box", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 9, length: 0)),
             ("code-chip", "# Notes\nrun `swift build` then `./test.sh` — see [docs](https://x.y)\n", nil),
+            ("code-wrap", "# Notes\nbehaviour `When do you start trusting AI blindly? When I first started using LLMs for tinkering` them and more\n", nil),
             ("multi-select", "# NYC\n☐ Central Park\n☐ Vessel\n", NSRange(location: 8, length: 22)),
         ]
         for (name, text, sel) in cases {
@@ -272,6 +273,22 @@ if CommandLine.arguments.contains("--uitest") {
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("editor-\(name).png"))
         }
     }
+
+    // Pasting a copied list item mid-line starts a new line; a mid-line ☐ is not a box.
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString("☐ 1. two", forType: .string)
+    (tv, coord) = makeUndoableEditor("☐ 1. one")
+    tv.setSelectedRange(NSRange(location: 8, length: 0))
+    tv.paste(nil); spin()
+    precondition(tv.string == "☐ 1. one\n☐ 1. two", tv.string)
+    NSPasteboard.general.clearContents()
+    (tv, coord) = makeEditor("☐ a ☐ b\n"); spin()
+    precondition(tv.textStorage!.attribute(checkboxKey, at: 0, effectiveRange: nil) != nil, "line-start box lost")
+    precondition(tv.textStorage!.attribute(checkboxKey, at: 4, effectiveRange: nil) == nil, "mid-line ☐ drawn as a box")
+    // backticks are hidden, the code between them is not
+    (tv, coord) = makeEditor("a `b` c\n"); spin()
+    precondition((tv.textStorage!.attribute(.font, at: 2, effectiveRange: nil) as? NSFont)?.pointSize ?? 1 < 1, "opening tick visible")
+    precondition((tv.textStorage!.attribute(.font, at: 3, effectiveRange: nil) as? NSFont)?.pointSize ?? 0 > 1, "code text hidden")
 
     print("uitest OK")
     exit(0)

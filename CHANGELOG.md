@@ -21,6 +21,12 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ### Fixed
 
+- **Pasting a copied list item or heading mid-line puts it on its own line** instead of
+  splicing a second checkbox into the current one. A ☐ that does end up mid-line shows as
+  a plain glyph, never as a box.
+- **Inline code no longer shows its backticks**, which read as stray quotes; the chip
+  hugs the code itself. A code span that wraps gets one chip per line rather than a block
+  covering both lines edge to edge.
 - **Links open on click.** A plain click on link text opens it; the caret goes into a
   link with the arrow keys.
 - **No more double checkboxes.** A slash block command typed in front of an existing
