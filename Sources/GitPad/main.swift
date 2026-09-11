@@ -251,10 +251,19 @@ if CommandLine.arguments.contains("--uitest") {
     // GITPAD_UITEST_SNAPSHOT=<dir>: render a few editor states to PNG for eyeballing what
     // the preconditions can't check (placeholders, chips). Never set on CI.
     if let dir = ProcessInfo.processInfo.environment["GITPAD_UITEST_SNAPSHOT"] {
-        for (name, text) in [("fresh", "# "), ("titled", "# Groceries\n\n"), ("body", "# Groceries\n- milk `2%` and [docs](https://x.y)\n")] {
+        let cases: [(String, String, NSRange?)] = [
+            ("fresh", "# ", nil), ("titled", "# Groceries\n\n", nil),
+            ("body", "# Groceries\n- milk `2%` and [docs](https://x.y)\n", nil),
+            ("select-empty-line", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 6, length: 1)),
+            ("select-empty-todo", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 7, length: 3)),
+            ("caret-before-box", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 7, length: 0)),
+            ("caret-after-box", "# NYC\n\n☐ \n☐ Central Park\n", NSRange(location: 9, length: 0)),
+        ]
+        for (name, text, sel) in cases {
             let (tv, _) = makeUndoableEditor(text)
             tv.frame = NSRect(x: 0, y: 0, width: 400, height: 160)
             tv.textContainerInset = EditorMetrics.inset
+            if let sel { tv.setSelectedRange(sel); tv.window?.makeKeyAndOrderFront(nil); tv.window?.makeFirstResponder(tv) }
             spin()
             let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds)!
             tv.cacheDisplay(in: tv.bounds, to: rep)
@@ -395,6 +404,22 @@ if CommandLine.arguments.contains("--selftest") {
     }
     precondition(store.notes.contains(where: { $0.path == external.path }), "watcher never saw the external file")
     try? fm.removeItem(at: notesDir)
+
+    // Slash aliases: "checkbox" finds To-do; the title still wins on its own prefix.
+    let todo = SlashCommand("To-do", "checklist", "☐ ", aliases: ["todo", "checkbox", "checklist"])
+    precondition(todo.matches("check") && todo.matches("Todo") && todo.matches("to-d") && !todo.matches("bul"))
+
+    // Caret never rests inside a hidden marker (heading hashes, ☐, "- ").
+    typealias CO = MarkdownTextView.Coordinator
+    let doc = "# T\n☐ a\n  - b\n"
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 0, length: 0), previous: 5) == 2)   // before "#" → after "# "
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 1, length: 0), previous: 5) == 2)   // inside "# "
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 4, length: 0), previous: 3) == 6)   // Right from line 1 end → after "☐ "
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 5, length: 0), previous: 6) == 3)   // Left from content start → previous line end
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 8, length: 0), previous: 0) == nil) // in the indent: fine
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 10, length: 0), previous: 0) == 12) // on "- " → content
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 6, length: 0), previous: 0) == nil) // content start: fine
+    precondition(CO.caretOutsideMarker(doc, caret: NSRange(location: 4, length: 3), previous: 0) == nil) // a selection is left alone
 
     // Slash block commands replace an existing marker instead of nesting inside it.
     typealias C = MarkdownTextView.Coordinator
