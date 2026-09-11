@@ -1855,7 +1855,7 @@ struct NoteRow: View {
 // MARK: - Smart markdown editor
 
 private let dividerKey = NSAttributedString.Key("gitpadDivider")
-private let checkboxKey = NSAttributedString.Key("gitpadCheckbox") // value: Bool (checked)
+let checkboxKey = NSAttributedString.Key("gitpadCheckbox") // value: Bool (checked)
 let codeKey = NSAttributedString.Key("gitpadCode")            // inline code span → rounded chip
 private let markerKey = NSAttributedString.Key("gitpadListMarker") // value: String (display marker)
 
@@ -2215,18 +2215,21 @@ struct MarkdownTextView: NSViewRepresentable {
                 (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(
                                         ofSize: fontSize + EditorMetrics.codeSizeDelta, weight: .regular),
                                      .foregroundColor: theme.code, codeKey: true]),
-                (re(#"`"#), [.foregroundColor: NSColor.tertiaryLabelColor]),
+                // the ticks read as stray quotes at 11pt; hide them the way "# " is hidden
+                (re(#"`(?=[^`\n]+`)|(?<=`[^`\n]{1,200})`"#), [.foregroundColor: NSColor.clear, .font: tinyFont]),
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
                 // 0.45, a step below secondary (~0.5): a done item should recede further
                 // than the 1.5pt tertiary outline of an item still waiting to be ticked.
-                (re(#"(?<=☑ ).*$"#), [.foregroundColor: NSColor.labelColor.withAlphaComponent(0.45),
+                (re(#"(?<=^\s{0,40}☑ ).*$"#), [.foregroundColor: NSColor.labelColor.withAlphaComponent(0.45),
                                       .strikethroughStyle: NSUnderlineStyle.single.rawValue]),
                 // hide the raw glyph AND neutralize its fallback-font layout: 0.1pt font +
                 // a kern that pins the advance to the drawn box width, so ☐ and ☑ occupy
                 // identical space (no text shift or line-height jump on toggle/typing)
-                (re(#"☐"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
+                // line-start only (bounded lookbehind = the indent): a ☐ that lands mid-line
+                // stays a visible glyph instead of a fake box nothing can toggle
+                (re(#"(?<=^\s{0,40})☐"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
                              .kern: checkKern("☐"), checkboxKey: false]),
-                (re(#"☑"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
+                (re(#"(?<=^\s{0,40})☑"#), [.foregroundColor: NSColor.clear, .font: tinyFont,
                              .kern: checkKern("☑"), checkboxKey: true]),
                 // dashes hidden; DividerLayoutManager draws a full-width rule instead
                 (re(#"^\s*[-—]{3,}\s*$"#), [.foregroundColor: NSColor.clear, dividerKey: true]),
@@ -3123,11 +3126,17 @@ final class DividerLayoutManager: NSLayoutManager {
             storage.enumerateAttribute(codeKey, in: charRange) { value, range, _ in
                 guard value != nil else { return }
                 let gr = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-                var rect = boundingRect(forGlyphRange: gr, in: container).offsetBy(dx: origin.x, dy: origin.y)
-                rect = rect.insetBy(dx: -2, dy: 1)
-                let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
-                code.withAlphaComponent(0.10).setFill(); path.fill()
-                code.withAlphaComponent(0.28).setStroke(); path.lineWidth = 0.5; path.stroke()
+                // one chip per line the span touches — the union rect of a wrapped span
+                // would cover both lines edge to edge
+                self.enumerateLineFragments(forGlyphRange: gr) { _, _, _, fragGlyphs, _ in
+                    let sub = NSIntersectionRange(gr, fragGlyphs)
+                    guard sub.length > 0 else { return }
+                    var rect = self.boundingRect(forGlyphRange: sub, in: container).offsetBy(dx: origin.x, dy: origin.y)
+                    rect = rect.insetBy(dx: -3, dy: 1)
+                    let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+                    self.code.withAlphaComponent(0.10).setFill(); path.fill()
+                    self.code.withAlphaComponent(0.28).setStroke(); path.lineWidth = 0.5; path.stroke()
+                }
             }
         }
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
@@ -3320,6 +3329,22 @@ final class SmartTextView: NSTextView {
         p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: font) * EditorMetrics.lineHeightMultiple).rounded()
         p.lineBreakMode = .byClipping
         return p
+    }
+
+    /// Pasting a copied list item or heading at the end of a line used to splice it in
+    /// ("☐ a☐ b" with a box drawn mid-line). A block belongs on its own line: if the
+    /// clipboard starts with a marker and the caret isn't at a line start, break first.
+    override func paste(_ sender: Any?) {
+        if let clip = NSPasteboard.general.string(forType: .string),
+           let first = clip.components(separatedBy: "\n").first,
+           ListLogic.match(first) != nil || MarkdownTextView.Coordinator.headingPrefix
+               .firstMatch(in: first, range: NSRange(location: 0, length: (first as NSString).length)) != nil {
+            let loc = selectedRange().location
+            if loc > 0, (string as NSString).character(at: loc - 1) != 0x0A {
+                insertText("\n", replacementRange: selectedRange())
+            }
+        }
+        super.paste(sender)
     }
 
     /// A width change means the panel was resized or collapsed to the pill — the selection
