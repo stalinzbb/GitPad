@@ -418,6 +418,7 @@ struct NavCenter: View {
             HStack(spacing: 5) {
                 if showSyncDot { SyncDot(status: store.syncStatus) }
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                if Updater.isDevBuild { DevTag() }
             }
             if let subtitle {
                 Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -425,6 +426,19 @@ struct NavCenter: View {
         }
         .frame(maxWidth: 200)
         .allowsHitTesting(false)
+    }
+}
+
+/// The panel-side twin of the menu bar's "dev": a locally built copy looks exactly like
+/// the release otherwise (same name, same bundle id, same icon).
+struct DevTag: View {
+    var body: some View {
+        Text("DEV")
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(Color.statusWarn.opacity(Alpha.iconHover), in: Capsule())
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Development build")
     }
 }
 
@@ -893,7 +907,9 @@ struct SettingsView: View {
 
                 case .advanced:
                 Section {
-                    LabeledContent("Version") { Text(Updater.currentVersion ?? "dev") }
+                    LabeledContent("Version") {
+                        Text((Updater.currentVersion ?? "—") + (Updater.isDevBuild ? " · dev build" : ""))
+                    }
                     // The opt-out is what keeps SECURITY.md's "no network calls except your
                     // git remote" honest — off means the app never contacts github.com.
                     Toggle("Check automatically", isOn: $autoCheckUpdates)
