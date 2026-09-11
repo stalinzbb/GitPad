@@ -5,6 +5,18 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Links work.** `[text](url)` renders as a link — accent, underlined, click opens it —
+  with the brackets and target receding. The selection bar's Link button fills the target
+  from a URL on the clipboard, or leaves the placeholder selected so typing or ⌘V replaces it.
+- **Inline code is a chip.** Backticked text sits on a tinted monospace chip instead of
+  only changing colour; the backticks stay editable but fade.
+- **Slash commands replace the marker you're in.** "☐ /title" turns the to-do into a title
+  and "- /numbered" converts the bullet, instead of nesting one marker inside another.
+- **The selection bar reads as enabled.** Its glyphs and paragraph menu are primary
+  colour, not the grey that looked disabled.
+
 ## [0.14.0] — 2026-09-11
 
 A sync can no longer overwrite the note you have open; Homebrew installs update from the

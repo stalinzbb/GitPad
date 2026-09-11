@@ -186,13 +186,22 @@ if CommandLine.arguments.contains("--uitest") {
     coord.makeTodo()
     precondition(tv.string == "☑ done\n☐ plain\n", tv.string)
 
-    // insertLink with nothing usable on the clipboard: empty parens, caret between them
+    // insertLink with nothing usable on the clipboard: the placeholder target is left
+    // selected, so typing or ⌘V replaces it
     NSPasteboard.general.clearContents()
     (tv, coord) = makeEditor("docs\n")
     tv.setSelectedRange(NSRange(location: 0, length: 4))
     coord.insertLink()
-    precondition(tv.string == "[docs]()\n", tv.string)
-    precondition(tv.selectedRange() == NSRange(location: 7, length: 0), "\(tv.selectedRange())")
+    precondition(tv.string == "[docs](url)\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 7, length: 3), "\(tv.selectedRange())")
+    // a URL on the clipboard fills the target and the caret lands after the ")"
+    NSPasteboard.general.setString("https://example.com/x", forType: .string)
+    (tv, coord) = makeEditor("docs\n")
+    tv.setSelectedRange(NSRange(location: 0, length: 4))
+    coord.insertLink()
+    precondition(tv.string == "[docs](https://example.com/x)\n", tv.string)
+    precondition(tv.selectedRange() == NSRange(location: 29, length: 0), "\(tv.selectedRange())")
+    NSPasteboard.general.clearContents()
 
     // Undo across a renumbering edit must converge on the original and keep redo alive.
     // The deferred renumber is its own top-level group (the event group has closed by the
@@ -226,6 +235,18 @@ if CommandLine.arguments.contains("--uitest") {
     tv.undoManager?.undo()
     spin()
     precondition(tv.string == "- one\n", "empty undo group swallowed the edit: \(tv.string)")
+
+    // Inline code is a chip and [text](url) is a real link; the brackets recede.
+    (tv, coord) = makeEditor("see `x` and [docs](https://example.com/a) here\n")
+    spin()
+    let st = tv.textStorage!
+    precondition(st.attribute(.backgroundColor, at: 5, effectiveRange: nil) != nil, "no code chip")
+    precondition(st.attribute(.backgroundColor, at: 2, effectiveRange: nil) == nil, "chip leaked onto prose")
+    let linkAt = "see `x` and [".utf16.count
+    precondition((st.attribute(.link, at: linkAt, effectiveRange: nil) as? URL)?.host == "example.com", "link text carries no .link")
+    precondition(st.attribute(.link, at: linkAt - 1, effectiveRange: nil) == nil, "bracket became a link")
+    (tv, coord) = makeEditor("[x](not a url)\n"); spin()
+    precondition(tv.textStorage!.attribute(.link, at: 1, effectiveRange: nil) == nil, "junk target must not be clickable")
 
     print("uitest OK")
     exit(0)
@@ -360,6 +381,17 @@ if CommandLine.arguments.contains("--selftest") {
     }
     precondition(store.notes.contains(where: { $0.path == external.path }), "watcher never saw the external file")
     try? fm.removeItem(at: notesDir)
+
+    // Slash block commands replace an existing marker instead of nesting inside it.
+    typealias C = MarkdownTextView.Coordinator
+    precondition(C.blockStart(before: "☐ ", snippet: "# ") == 0)        // to-do → title
+    precondition(C.blockStart(before: "☐ ", snippet: "1. ") == 0)       // to-do → numbered
+    precondition(C.blockStart(before: "  - ", snippet: "☐ ") == 2)      // nested bullet keeps its indent
+    precondition(C.blockStart(before: "  - ", snippet: "# ") == 0)      // headings never indent
+    precondition(C.blockStart(before: "# ", snippet: "☐ ") == 0)        // heading → to-do
+    precondition(C.blockStart(before: "☐ words ", snippet: "# ") == nil) // marker + text: ordinary insert
+    precondition(C.blockStart(before: "", snippet: "# ") == nil)         // plain line: ordinary insert
+    precondition(C.blockStart(before: "☐ ", snippet: "---\n") == nil)    // not a block command
 
     // Conflict diff: lines unique to each side, by index.
     let d1 = NoteStore.uniqueLines(["# T", "a", "b", "c"], ["# T", "a", "x", "c"])

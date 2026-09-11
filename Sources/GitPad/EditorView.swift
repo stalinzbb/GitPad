@@ -2199,9 +2199,13 @@ struct MarkdownTextView: NSViewRepresentable {
                 (re(#"\*\*[^*\n]+\*\*"#), [.font: Self.bold(f)]),
                 (re(#"(?<!\*)\*[^*\n]+\*(?!\*)"#), [.obliqueness: 0.15]),
                 (re(#"~~[^~\n]+~~"#), [.strikethroughStyle: NSUnderlineStyle.single.rawValue]),
+                // a chip, not just a colour: monospace on a tinted background reads as code
+                // at a glance; the backticks stay (editable) but recede to tertiary
                 (re(#"`[^`\n]+`"#), [.font: NSFont.monospacedSystemFont(
                                         ofSize: fontSize + EditorMetrics.codeSizeDelta, weight: .regular),
-                                     .foregroundColor: theme.code]),
+                                     .foregroundColor: theme.code,
+                                     .backgroundColor: theme.code.withAlphaComponent(0.13)]),
+                (re(#"`"#), [.foregroundColor: NSColor.tertiaryLabelColor]),
                 // strike/dim only the text after a checked box (fixed 2-char lookbehind)
                 // 0.45, a step below secondary (~0.5): a done item should recede further
                 // than the 1.5pt tertiary outline of an item still waiting to be ticked.
@@ -2234,10 +2238,33 @@ struct MarkdownTextView: NSViewRepresentable {
                     if let r = match?.range { storage.addAttributes(attrs, range: r) }
                 }
             }
+            // [text](url): the text becomes a real link (accent, underline, click opens),
+            // the brackets and the target recede. Per-group attributes, hence not in `list`.
+            let accent = Theme.named(themeID).accent
+            Self.linkRegex.enumerateMatches(in: storage.string, range: range) { m, _, _ in
+                guard let m else { return }
+                storage.addAttributes([.foregroundColor: NSColor.tertiaryLabelColor], range: m.range)
+                let text = m.range(at: 1), target = m.range(at: 2)
+                var attrs: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: accent, .underlineStyle: NSUnderlineStyle.single.rawValue]
+                let raw = (storage.string as NSString).substring(with: target)
+                if let url = URL(string: raw), let scheme = url.scheme, ["http", "https", "mailto"].contains(scheme) {
+                    attrs[.link] = url
+                }
+                storage.addAttributes(attrs, range: text)
+            }
             applyListLayout(storage, in: range)
             storage.endEditing()
-            if let tv = textView { refreshTypingAttributes(tv) }
+            if let tv = textView {
+                // .link ranges draw with these, not the storage colour — keep them in the theme
+                tv.linkTextAttributes = [.foregroundColor: accent, .cursor: NSCursor.pointingHand,
+                                         .underlineStyle: NSUnderlineStyle.single.rawValue]
+                refreshTypingAttributes(tv)
+            }
         }
+
+        /// `[text](target)` — text can't contain `]`, target can't contain `)`.
+        static let linkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]*)\)"#)
 
         // MARK: list layout — hanging indents + display markers
         private var listStyleCache: [String: NSParagraphStyle] = [:]
@@ -2556,14 +2583,36 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         /// Replaces "/" and everything typed after it — so the snippet lands where the
-        /// query was, leaving no crumbs.
+        /// query was, leaving no crumbs. A block command typed right after an existing
+        /// marker ("☐ /title", "- /numbered") replaces that marker instead of nesting.
         private func insertSnippet(_ cmd: SlashCommand) {
             guard let tv = textView, let loc = slashLocation else { return }
             let caret = tv.selectedRange().location
             let ns = tv.string as NSString
             guard loc < ns.length, caret >= loc, caret <= ns.length else { return dismissSlash() }
-            tv.insertText(cmd.snippet, replacementRange: NSRange(location: loc, length: caret - loc))
+            let para = ns.paragraphRange(for: NSRange(location: loc, length: 0))
+            let before = ns.substring(with: NSRange(location: para.location, length: loc - para.location))
+            let start = Self.blockStart(before: before, snippet: cmd.snippet).map { para.location + $0 } ?? loc
+            tv.insertText(cmd.snippet, replacementRange: NSRange(location: start, length: caret - start))
             dismissSlash()
+        }
+
+        static let blockSnippets: Set<String> = ["# ", "## ", "- ", "☐ ", "1. "]
+
+        /// Where a block snippet should start replacing, as an offset into the paragraph —
+        /// nil means "just replace the slash query". `before` is the paragraph text up to
+        /// the "/". Only fires when that text is *exactly* a marker (plus indent) or a
+        /// heading prefix: "☐ some words /title" is an ordinary insert.
+        static func blockStart(before: String, snippet: String) -> Int? {
+            guard blockSnippets.contains(snippet) else { return nil }
+            let ns = before as NSString
+            if headingPrefix.firstMatch(in: before, range: NSRange(location: 0, length: ns.length))?.range.length == ns.length {
+                return 0 // "# " → any block replaces the heading outright
+            }
+            let (indent, body) = split(before)
+            guard body.isEmpty, ns.length > (indent as NSString).length else { return nil } // a marker, nothing after
+            // headings never indent; lists keep their nesting
+            return snippet.hasPrefix("#") ? 0 : (indent as NSString).length
         }
 
         // MARK: highlight-to-actions mini toolbar
@@ -2744,18 +2793,23 @@ struct MarkdownTextView: NSViewRepresentable {
             showActions()
         }
 
-        /// `[selection](url)`. A URL sitting on the clipboard fills the target — otherwise the
-        /// parens are left empty with the caret inside them, ready to type.
+        /// `[selection](url)`. A URL on the clipboard fills the target and the caret lands
+        /// after it. Otherwise the target is the placeholder word `url`, left *selected*:
+        /// typing or ⌘V replaces it, which is the whole interaction — no dialog. Once a
+        /// real target is in place the text renders as a link and a click opens it.
         func insertLink() {
             guard let tv = textView else { return }
             let sel = tv.selectedRange()
             let s = (tv.string as NSString).substring(with: sel)
             let clip = (NSPasteboard.general.string(forType: .string) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let url = (clip.hasPrefix("http://") || clip.hasPrefix("https://")) ? clip : ""
+            let fromClip = clip.hasPrefix("http://") || clip.hasPrefix("https://")
+            let url = fromClip ? clip : "url"
             if replaceText(tv, sel, "[\(s)](\(url))") {
-                let caret = sel.location + (s as NSString).length + 3 + (url as NSString).length
-                tv.setSelectedRange(NSRange(location: caret, length: 0)) // before the ")"
+                let start = sel.location + (s as NSString).length + 3
+                tv.setSelectedRange(fromClip
+                    ? NSRange(location: start + (url as NSString).length + 1, length: 0) // after ")"
+                    : NSRange(location: start, length: (url as NSString).length))         // "url" selected
             }
             actionCard.close()
         }
@@ -2867,7 +2921,7 @@ struct ActionBar: View {
             mark("italic", "Italic", "*")
             mark("strikethrough", "Strikethrough", "~~")
             mark("chevron.left.forwardslash.chevron.right", "Inline code", "`")
-            ChromeIcon(symbol: "link", help: "Link") { coordinator.insertLink() }
+            ChromeIcon(symbol: "link", help: "Link", tint: .primary) { coordinator.insertLink() }
             Divider().frame(height: 14)
             Menu {
                 Button("Body") { coordinator.makeBody() }
@@ -2882,7 +2936,7 @@ struct ActionBar: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)
             .padding(.trailing, Space.xs)
             .help("Paragraph type")
         }
@@ -2892,8 +2946,9 @@ struct ActionBar: View {
 
     /// ChromeIcon carries the house hover background, glyph size/weight and tooltip; the
     /// active fill is the theme's own selection colour, the same one a picked row wears.
+    /// Primary, not the chrome's secondary: six grey glyphs in a row read as disabled.
     @ViewBuilder private func mark(_ symbol: String, _ help: String, _ mark: String) -> some View {
-        ChromeIcon(symbol: symbol, help: help) { coordinator.wrap(mark) }
+        ChromeIcon(symbol: symbol, help: help, tint: .primary) { coordinator.wrap(mark) }
             .rowBackground(selected: active.contains(mark))
     }
 }
