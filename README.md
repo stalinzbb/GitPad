@@ -20,7 +20,7 @@ subscription, no Electron.
 - **Smart editor** — live markdown styling, slash commands (`/` at the caret), auto-continuing lists and checkboxes, clickable to-dos, a select-text mini toolbar.
 - **Daily notes** — ⌥Space always lands on today's note; ⌘N for a fresh one.
 - **Library** — search-as-you-type, Pinned / Today / This Week / Earlier, folders. Pin notes and reveal any in Finder from the ⋯ menu.
-- **Quick capture from anywhere else** — the `gitpad://` URL scheme (`new?text=`, `daily`, `daily?append=`) drives GitPad from Raycast, Alfred, Shortcuts.app, or a shell script; "Append Clipboard to Daily" and your recent notes live in the status-bar menu.
+- **Quick capture from anywhere else** — the `gitpad://` URL scheme (`new?text=`, `daily`, `daily?append=`, `note?title=`) drives GitPad from Raycast, Alfred, Shortcuts.app, or a shell script; "Append Clipboard to Daily" and your recent notes live in the status-bar menu.
 - **Invisible git sync** — commits, merges and pushes on every save, every 5 minutes, on wake, and when you open the panel. A second Mac pointed at the same repo adopts it cleanly instead of fighting it; genuine conflicts keep both versions and get their own review screen. See [SYNCING.md](SYNCING.md).
 - **Pill mode** — collapse the whole UI to a draggable 240×40 lozenge that floats over your work; ⌥Space springs it back.
 - **Themes** — System, Sepia, Nord, Dracula, Solarized Light. Each flips the whole window's appearance so every control adapts, not just a color wash.

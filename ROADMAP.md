@@ -15,7 +15,7 @@ or it doesn't ship.
 ## Next — power, still lazy
 
 - [ ] Full-text search hotkey.
-- [ ] `[[note linking]]` + backlinks.
+- [x] **`[[note linking]]` + backlinks** — `[[` completion card, click opens or creates, "N linked" menu in the status line.
 - [ ] Note templates.
 - [x] **`gitpad://` URL scheme** — `new?text=`, `daily`, `daily?append=`. Unlocks Raycast/Alfred/Shortcuts/scripts.
 - [x] **Clipboard quick-capture** — "Append Clipboard to Daily" in the status menu (and `gitpad://daily?append=`).
