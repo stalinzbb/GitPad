@@ -14,6 +14,9 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 - **Dev builds say so.** A locally built or ad-hoc-signed copy shows "dev" beside the
   menu-bar glyph, a DEV tag in the panel header, and "dev build" on the Settings version
   row, so it can't be mistaken for the installed release.
+- **Notes edited elsewhere show up immediately.** GitPad now watches the notes folder,
+  so a note written by another app, a script or a sync merge appears in the library
+  within a second instead of at the next timer tick or panel open.
 - **Name this Mac.** Settings → Sync → "This Mac" sets the commit author and the
   "conflict from …" label instead of always using the Mac's own name.
 - **The gh shortcut says what it grants.** Onboarding's one-click repo and Fix Sync's

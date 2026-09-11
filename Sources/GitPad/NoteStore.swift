@@ -28,7 +28,17 @@ final class NoteStore: ObservableObject {
     /// worktree shares this app's bundle id, notes dir and defaults with an installed copy,
     /// so without it every test edit lands in the real notes and syncs to the real remote.
     /// Same escape-hatch shape as `GITPAD_DEVICE_NAME` in GitSync.
-    static let defaultDir = ProcessInfo.processInfo.environment["GITPAD_DIR"].map { URL(fileURLWithPath: $0) }
+    // realpath'd: /tmp and /var are symlinks, and directory enumeration hands back the
+    // resolved form — a `dir` that doesn't match its own listing makes every path
+    // comparison (selected-note survival in refresh, the watcher's paths) silently miss.
+    // The folder itself may not exist yet (the store creates it), and realpath needs an
+    // existing path — so resolve the parent, which is where /tmp and /var live anyway.
+    static let defaultDir = ProcessInfo.processInfo.environment["GITPAD_DIR"].map { raw -> URL in
+        let url = URL(fileURLWithPath: raw)
+        guard let r = realpath(url.deletingLastPathComponent().path, nil) else { return url }
+        defer { free(r) }
+        return URL(fileURLWithPath: String(cString: r)).appendingPathComponent(url.lastPathComponent)
+    }
         ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents/GitPad")
     let dir = NoteStore.defaultDir
@@ -133,6 +143,7 @@ final class NoteStore: ObservableObject {
     /// buffer was derived from. Anything else on disk got there behind our back (a sync
     /// merge, another editor), and the buffer must not be allowed to overwrite it.
     private var loadedMtime: Date = .distantPast
+    private var watcher: FolderWatcher?
 
     init() {
         if Vault.isLocked { locked = true } else { open() }
@@ -147,10 +158,14 @@ final class NoteStore: ObservableObject {
         refresh()
         if !UserDefaults.standard.bool(forKey: "onboarded") { screen = .onboarding }
         selected = dailyNote()
+        // Edits from anything else — another editor, a script, `gitpad://`, a sync merge —
+        // show up within a second instead of at the next timer tick or panel open.
+        watcher = FolderWatcher(dir) { [weak self] in self?.refresh() }
     }
 
     /// Drop every trace of note content from memory before the volume goes away.
     private func close() {
+        watcher = nil // before the volume detaches: a stream on a vanished path is useless
         flushPendingSave() // still mounted here, so the write lands
         selected = nil; notes = []; folders = []; uncacheAll()
         locked = true
@@ -712,5 +727,48 @@ final class NoteStore: ObservableObject {
         uncache(url) // body changed → search/snippet re-read next time
         if wroteCopy { refresh() } // the copy shows up in the library (and Conflicts) now, not next sync
         onSaved?()
+    }
+}
+
+/// One FSEvents stream on the notes folder → one `refresh()` per batch of changes.
+/// FSEvents, not a kqueue on the directory: kqueue only sees the folder's own entries,
+/// and edits to a note's *contents* (or anything in a subfolder) never reach it.
+///
+/// Events under `.git/` are dropped: a sync writes there constantly and none of it
+/// changes what the library shows — the sync's own completion already refreshes.
+/// ponytail: no per-path bookkeeping, refresh re-stats everything; fine at hundreds of
+/// notes, revisit if the library ever holds tens of thousands.
+final class FolderWatcher {
+    private var stream: FSEventStreamRef?
+    private let onChange: () -> Void
+
+    init?(_ dir: URL, onChange: @escaping () -> Void) {
+        self.onChange = onChange
+        var context = FSEventStreamContext()
+        context.info = Unmanaged.passUnretained(self).toOpaque()
+        let callback: FSEventStreamCallback = { _, info, count, paths, _, _ in
+            guard let info else { return }
+            let me = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
+            // UseCFTypes below: `paths` is a CFArray of CFString, not a char**.
+            let list = Unmanaged<CFArray>.fromOpaque(paths).takeUnretainedValue() as? [String] ?? []
+            if list.prefix(count).contains(where: { !$0.contains("/.git/") && !$0.hasSuffix("/.git") }) {
+                me.onChange()
+            }
+        }
+        guard let s = FSEventStreamCreate(nil, callback, &context, [dir.path] as CFArray,
+                                          FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1.0,
+                                          FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents
+                                                                   | kFSEventStreamCreateFlagUseCFTypes))
+        else { return nil }
+        FSEventStreamSetDispatchQueue(s, .main) // refresh() is main-thread state
+        FSEventStreamStart(s)
+        stream = s
+    }
+
+    deinit {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
     }
 }

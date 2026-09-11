@@ -349,6 +349,16 @@ if CommandLine.arguments.contains("--selftest") {
     store.text += "more\n"
     store.saveNow() // disk untouched since our own write → plain save, no second copy
     precondition(store.conflicts.count == 1, "spurious conflict copy on an ordinary save")
+
+    // FolderWatcher: a file written by something else appears without a manual refresh.
+    // store.dir, not notesDir: the store realpaths GITPAD_DIR (/var → /private/var).
+    let external = store.dir.appendingPathComponent("from-elsewhere.md")
+    try! "# Elsewhere\n".write(to: external, atomically: true, encoding: .utf8)
+    let deadline = Date().addingTimeInterval(6) // FSEvents latency is 1 s; leave slack for CI
+    while Date() < deadline, !store.notes.contains(where: { $0.path == external.path }) {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+    precondition(store.notes.contains(where: { $0.path == external.path }), "watcher never saw the external file")
     try? fm.removeItem(at: notesDir)
 
     // Commit author: Settings override beats the Mac's name, blank means the Mac's name.
