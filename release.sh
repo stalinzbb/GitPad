@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build, sign (Developer ID), notarize, and package GitPad for release.
+# Build, sign (Developer ID), notarize, package, and publish GitPad (via publish.sh).
 # Dev builds use ./build.sh (ad-hoc signed); this script is the production path.
 #
 # One-time setup (stores an app-specific password in your keychain; Claude/CI never see it):
@@ -51,6 +51,6 @@ xcrun stapler staple "$DMG"
 
 spctl -a -vv GitPad.app
 echo "Release ready: $(pwd)/$ZIP + $DMG (v$VERSION, notarized + stapled)"
-echo "SHA-256 (paste into the release notes so users can verify downloads):"
 shasum -a 256 "$ZIP" "$DMG"
-echo "Remember: bump version + sha256 in stalinzbb/homebrew-tap Casks/gitpad.rb"
+# GitHub pre-release + tap cask. Idempotent, so a failed publish is re-run alone: ./publish.sh
+./publish.sh
