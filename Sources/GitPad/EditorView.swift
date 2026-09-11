@@ -738,6 +738,7 @@ struct SettingsView: View {
     @AppStorage("theme") private var themeID = "System"
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates = true
     @AppStorage("autoUpdate") private var autoUpdate = false
+    @AppStorage("vaultIdleMinutes") private var vaultIdleMinutes = 0
     @State private var remote = ""
     @State private var log: [SyncLog.Entry] = []
     @State private var checkingUpdate = false
@@ -748,6 +749,13 @@ struct SettingsView: View {
             if vaultEnabled {
                 LabeledContent("Notes are encrypted at rest") {
                     Button("Lock now") { store.lockVault() }
+                }
+                Picker("Lock when idle", selection: $vaultIdleMinutes) {
+                    Text("Never").tag(0)
+                    Text("After 5 minutes").tag(5)
+                    Text("After 15 minutes").tag(15)
+                    Text("After 30 minutes").tag(30)
+                    Text("After 1 hour").tag(60)
                 }
                 if Vault.touchIDAvailable {
                     // Bound to the store switch, not the default directly: the move reads the
@@ -787,8 +795,8 @@ struct SettingsView: View {
             if vaultEnabled || vaultExpanded {
                 Text(vaultEnabled
                      ? (vaultTouchID
-                        ? "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps. The passphrase is sealed by the Secure Enclave and released only after Touch ID (or your password on a Mac without it) — expect a prompt at launch and after every screen unlock. Decrypt puts the plain files back."
-                        : "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks or the Mac sleeps; the passphrase is in your login Keychain, so unlocking is silent. Decrypt puts the plain files back.")
+                        ? "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks, the Mac sleeps, or nobody has touched the keyboard for the idle time above. The passphrase is sealed by the Secure Enclave and released only after Touch ID (or your password on a Mac without it) — expect a prompt at launch and after every screen unlock. Decrypt puts the plain files back."
+                        : "Your notes live in an AES-256 disk image mounted at the same folder. It locks when the screen locks, the Mac sleeps, or nobody has touched the keyboard for the idle time above; the passphrase is in your login Keychain, so unlocking is silent. Decrypt puts the plain files back.")
                      : "Moves your notes into an AES-256 disk image mounted at the same folder — git sync is unchanged. Locks when the screen locks or the Mac sleeps; the passphrase is kept in your login Keychain. No recovery: a lost passphrase means lost notes unless a remote has them.")
                     .font(.caption).foregroundStyle(.secondary)
             }
