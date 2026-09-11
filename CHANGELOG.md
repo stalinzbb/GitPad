@@ -7,6 +7,9 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ### Changed
 
+- **New icon.** A new app icon, and a matching menu-bar glyph drawn from an SVG as a
+  template image, so it stays crisp and adapts to light and dark menu bars. The sync-problem
+  state badges it with a notched dot instead of switching to a different symbol.
 - **Placeholders.** An empty note shows "Untitled" in title weight where the title will
   land and "Start typing. / for commands." where the body will; each disappears the moment
   that part has text. Drawn over the editor, never inserted into the note.

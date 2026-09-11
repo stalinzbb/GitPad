@@ -1,5 +1,6 @@
 #!/bin/bash
-# Regenerate Resources/AppIcon.icns from make-icon.swift. Called by build.sh when stale.
+# Regenerate Resources/AppIcon.icns from Resources/AppIcon-source.png (via make-icon.swift,
+# which pads it into the macOS icon grid). Called by build.sh when stale.
 set -euo pipefail
 cd "$(dirname "$0")"
 swift make-icon.swift

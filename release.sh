@@ -19,7 +19,8 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.pl
 ZIP="GitPad-$VERSION.zip"
 
 # assemble the app exactly like build.sh, then sign for real
-if [ ! -f Resources/AppIcon.icns ] || [ make-icon.swift -nt Resources/AppIcon.icns ]; then
+if [ ! -f Resources/AppIcon.icns ] || [ make-icon.swift -nt Resources/AppIcon.icns ] \
+   || [ Resources/AppIcon-source.png -nt Resources/AppIcon.icns ]; then
     ./make-icns.sh
 fi
 swift build -c release
@@ -27,7 +28,7 @@ rm -rf GitPad.app "$ZIP"
 mkdir -p GitPad.app/Contents/MacOS GitPad.app/Contents/Resources
 cp .build/release/GitPad GitPad.app/Contents/MacOS/
 cp Info.plist GitPad.app/Contents/
-cp Resources/AppIcon.icns GitPad.app/Contents/Resources/
+cp Resources/AppIcon.icns Resources/MenuBarIcon.svg GitPad.app/Contents/Resources/
 codesign --force --options runtime --timestamp --sign "$IDENTITY" GitPad.app
 
 # notarize a temp zip, staple the app, then zip the stapled app for distribution
