@@ -7,6 +7,21 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ### Changed
 
+- **Slash commands answer to other names.** "/checkbox", "/checklist" or "/task" find
+  To-do; "/h1" finds Title; "/bullets", "/numbered", "/hr" and friends work too.
+- **Dev builds get their own glyph.** A hollow ring in the menu-bar icon's corner, on top
+  of the "dev" label.
+
+### Fixed
+
+- **Selecting a blank line no longer paints a bar to the right edge**; the highlight
+  stops a few points past the text, as in Notes.
+- **The caret can't rest inside a checkbox or heading marker** any more, where it sat on
+  top of the drawn box. It lands on the text instead; one Left from there goes to the
+  previous line's end.
+- **The selection bar and slash menu close when the panel collapses to the pill** or is
+  resized, instead of floating loose next to it.
+
 - **New icon.** A new app icon, and a matching menu-bar glyph drawn from an SVG as a
   template image, so it stays crisp and adapts to light and dark menu bars. The sync-problem
   state badges it with a notched dot instead of switching to a different symbol.

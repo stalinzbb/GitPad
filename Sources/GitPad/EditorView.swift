@@ -2488,15 +2488,15 @@ struct MarkdownTextView: NSViewRepresentable {
         private static func slashCommands() -> [SlashCommand] {
             let now = Date()
             return [
-                SlashCommand("Title", "textformat.size", "# "),
-                SlashCommand("Subtitle", "textformat", "## "),
-                SlashCommand("Bullet List", "list.bullet", "- "),
-                SlashCommand("To-do", "checklist", "☐ "),
-                SlashCommand("Numbered List", "list.number", "1. "),
-                SlashCommand("Date", "calendar", now.formatted(date: .abbreviated, time: .omitted) + " "),
+                SlashCommand("Title", "textformat.size", "# ", aliases: ["h1", "heading", "header"]),
+                SlashCommand("Subtitle", "textformat", "## ", aliases: ["h2", "heading 2", "subheading"]),
+                SlashCommand("Bullet List", "list.bullet", "- ", aliases: ["bullets", "list", "ul", "unordered"]),
+                SlashCommand("To-do", "checklist", "☐ ", aliases: ["todo", "checkbox", "checklist", "task", "check"]),
+                SlashCommand("Numbered List", "list.number", "1. ", aliases: ["numbered", "ordered", "ol", "numbers"]),
+                SlashCommand("Date", "calendar", now.formatted(date: .abbreviated, time: .omitted) + " ", aliases: ["today"]),
                 SlashCommand("Date & Time", "clock",
                              now.formatted(date: .abbreviated, time: .shortened) + " "),
-                SlashCommand("Divider", "minus", "---\n"),
+                SlashCommand("Divider", "minus", "---\n", aliases: ["hr", "line", "rule", "separator"]),
             ]
         }
 
@@ -2527,8 +2527,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
             let all = Self.slashCommands()
             slashItems = query.isEmpty ? all
-                : all.filter { NoteStore.fold($0.title).hasPrefix(NoteStore.fold(query))
-                    || NoteStore.fold($0.title).contains(NoteStore.fold(query)) }
+                : all.filter { $0.matches(query) }
             guard !slashItems.isEmpty else { return dismissSlash() }
             slashIndex = min(slashIndex, slashItems.count - 1)
             showSlash(tv, at: loc, query: query)
@@ -2573,6 +2572,11 @@ struct MarkdownTextView: NSViewRepresentable {
             let query = (tv.string as NSString).substring(with: NSRange(location: loc + 1,
                                                                         length: max(0, caret - loc - 1)))
             showSlash(tv, at: loc, query: query)
+        }
+
+        func closeFloatingCards() {
+            actionCard.close()
+            dismissSlash()
         }
 
         func dismissSlash() {
@@ -2624,12 +2628,43 @@ struct MarkdownTextView: NSViewRepresentable {
         /// bar feel like it appears with your hand rather than a quarter-second behind it.
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
+            if let snapped = Self.caretOutsideMarker(tv.string, caret: tv.selectedRange(), previous: lastCaret) {
+                tv.setSelectedRange(NSRange(location: snapped, length: 0)) // re-enters here with a clean caret
+                return
+            }
+            lastCaret = tv.selectedRange().location
             refreshTypingAttributes(tv)
             if tv.selectedRange().length == 0 {
                 actionCard.close()
             } else if actionCard.isVisible || NSEvent.pressedMouseButtons == 0 {
                 showActions()
             }
+        }
+
+        private var lastCaret = 0
+
+        /// The heading hashes and list markers are drawn as something else (nothing, a
+        /// checkbox, a bullet) and are ~0pt wide, so a caret inside them sits on top of the
+        /// drawn glyph. Where it should go instead, or nil if it's fine where it is:
+        /// one step Left from the content start hops to the previous line's end (what
+        /// Left means there); anything else lands on the content start.
+        static func caretOutsideMarker(_ text: String, caret: NSRange, previous: Int) -> Int? {
+            guard caret.length == 0 else { return nil }
+            let ns = text as NSString
+            guard caret.location <= ns.length else { return nil }
+            let lineR = ns.lineRange(for: NSRange(location: caret.location, length: 0))
+            let line = ns.substring(with: lineR)
+            let markerStart: Int, contentStart: Int
+            if let h = headingPrefix.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) {
+                markerStart = 0; contentStart = h.range.length
+            } else if let m = ListLogic.match(line) {
+                markerStart = m.range(at: 1).length; contentStart = m.range(at: 4).location
+            } else { return nil }
+            let local = caret.location - lineR.location
+            guard local >= markerStart, local < contentStart else { return nil }
+            let content = lineR.location + contentStart
+            if previous == content, lineR.location > 0 { return lineR.location - 1 }
+            return content
         }
 
         /// Called from `SmartTextView.mouseUp`: the drag is over, the selection is final.
@@ -2846,9 +2881,19 @@ struct SlashCommand: Identifiable {
     /// What lands in the document. Date/Time bake the value in at build time, which is also
     /// what the row previews — the old menu inserted a format you couldn't see first.
     let snippet: String
+    /// Other names people type for the same thing ("checkbox" for To-do, "h1" for Title).
+    /// Prefix-matched like the title; the row still shows the title.
+    let aliases: [String]
 
-    init(_ title: String, _ symbol: String, _ snippet: String) {
-        self.title = title; self.symbol = symbol; self.snippet = snippet
+    init(_ title: String, _ symbol: String, _ snippet: String, aliases: [String] = []) {
+        self.title = title; self.symbol = symbol; self.snippet = snippet; self.aliases = aliases
+    }
+
+    /// Title prefix or substring, or any alias prefix — folded, so case and accents don't matter.
+    func matches(_ query: String) -> Bool {
+        let q = NoteStore.fold(query)
+        let t = NoteStore.fold(title)
+        return t.hasPrefix(q) || t.contains(q) || aliases.contains { NoteStore.fold($0).hasPrefix(q) }
     }
 
     /// Only the snippets that insert a literal value are worth previewing; a "- " prefix
@@ -2958,6 +3003,28 @@ struct ActionBar: View {
 /// (their text is set to clear; the character stays in the model for editing).
 final class DividerLayoutManager: NSLayoutManager {
     var accent: NSColor = .controlAccentColor
+
+    /// Selection (and any background attribute) comes through here. A selected newline is
+    /// handed to us as a bar out to the container's right edge — a blank line selected
+    /// looked like a giant highlighted block. Cap every rect at the line's used width
+    /// plus a small stub, which is what Notes shows for a selected line end.
+    override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
+                                          forCharacterRange charRange: NSRange, color: NSColor) {
+        guard let container = textContainers.first, let tv = container.textView else {
+            return super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+        }
+        let origin = tv.textContainerOrigin
+        var rects = Array(UnsafeBufferPointer(start: rectArray, count: rectCount))
+        for i in rects.indices {
+            let r = rects[i]
+            let gi = glyphIndex(for: NSPoint(x: r.minX - origin.x + 1, y: r.midY - origin.y), in: container)
+            let used = lineFragmentUsedRect(forGlyphAt: gi, effectiveRange: nil).offsetBy(dx: origin.x, dy: origin.y)
+            if r.maxX > used.maxX + 1 { rects[i].size.width = max(0, used.maxX + 6 - r.minX) }
+        }
+        rects.withUnsafeBufferPointer {
+            super.fillBackgroundRectArray($0.baseAddress!, count: rectCount, forCharacterRange: charRange, color: color)
+        }
+    }
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
@@ -3142,6 +3209,15 @@ final class SmartTextView: NSTextView {
         p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: font) * EditorMetrics.lineHeightMultiple).rounded()
         p.lineBreakMode = .byClipping
         return p
+    }
+
+    /// A width change means the panel was resized or collapsed to the pill — the selection
+    /// bar and slash card were positioned for the old geometry and would float loose.
+    /// Height changes are ignored: the view grows with every typed line.
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(newSize)
+        if widthChanged { (delegate as? MarkdownTextView.Coordinator)?.closeFloatingCards() }
     }
 
     /// The drag is over, so the selection is final — see `Coordinator.selectionSettled`.

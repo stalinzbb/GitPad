@@ -465,7 +465,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
             glyph.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
-            guard alert, let ctx = NSGraphicsContext.current else { return true }
+            guard let ctx = NSGraphicsContext.current else { return true }
+            if Updater.isDevBuild { // top-right: a hollow ring, so the glyph itself says "dev"
+                let notch = NSRect(x: rect.maxX - 8, y: rect.maxY - 8, width: 8, height: 8)
+                ctx.compositingOperation = .destinationOut
+                NSBezierPath(ovalIn: notch).fill()
+                ctx.compositingOperation = .sourceOver
+                let ring = NSBezierPath(ovalIn: notch.insetBy(dx: 1.5, dy: 1.5))
+                ring.lineWidth = 1.5
+                ring.stroke()
+            }
+            guard alert else { return true }
             let notch = NSRect(x: rect.maxX - 8, y: rect.minY, width: 8, height: 8) // bottom-right corner
             ctx.compositingOperation = .destinationOut
             NSBezierPath(ovalIn: notch).fill()                       // clear a hole in the glyph
