@@ -363,6 +363,13 @@ if CommandLine.arguments.contains("--selftest") {
     exit(0)
 }
 
+// Warm the signed-build check before a single view exists. It is a lazy static that shells
+// out to codesign, and Process.waitUntilExit spins the run loop — so the first SwiftUI body
+// to ask (NavCenter's DEV tag) re-entered another body, which asked again while the
+// one-time init was still running, and dispatch_once trapped. Deterministic on a
+// locked-vault launch (test_vault_app.sh), racy otherwise. Here nothing can re-enter.
+_ = Updater.isDevBuild
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
