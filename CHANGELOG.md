@@ -5,6 +5,12 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-09-11
+
+A new icon, links that open, placeholders that say what goes where, and a day of editor
+polish: code as tokens, markers the caret can't get stuck in, and nothing pasted or
+slashed into a second checkbox.
+
 ### Changed
 
 - **Inline code is a rounded token** with a hairline edge instead of a square wash.
