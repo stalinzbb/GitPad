@@ -2044,13 +2044,14 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
-        private static func bold(_ f: NSFont) -> NSFont {
+        static func bold(_ f: NSFont) -> NSFont {
             NSFont(descriptor: f.fontDescriptor.withSymbolicTraits(.bold), size: f.pointSize) ?? f
         }
 
         // MARK: text change → binding + slash menu
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
+            tv.needsDisplay = true // placeholders live outside the edited range (see SmartTextView.draw)
             parent.text = tv.string
             updateSlashMenu(tv)
         }
@@ -3083,6 +3084,64 @@ final class SmartTextView: NSTextView {
             }
         }
         super.mouseDown(with: event)
+    }
+
+    /// "Untitled" where the title will land and "Start typing…" where the body will, each
+    /// only while that part is empty. Drawn, not inserted: the document stays exactly what
+    /// the user typed (a fresh note is "# " and nothing else). Positions come from the real
+    /// caret rects, so the hints sit precisely where the typed text appears.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawPlaceholders()
+    }
+
+    private func drawPlaceholders() {
+        guard let coord = delegate as? MarkdownTextView.Coordinator, let window else { return }
+        let ns = string as NSString
+        let titleRange = ns.length == 0 ? NSRange(location: 0, length: 0)
+            : ns.lineRange(for: NSRange(location: 0, length: 0))
+        let titleLine = ns.substring(with: titleRange).trimmingCharacters(in: .newlines)
+        let hasNewline = titleRange.length > (titleLine as NSString).length
+        let bodyEmpty = ns.substring(from: titleRange.location + titleRange.length)
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        func viewRect(at index: Int) -> NSRect {
+            let screen = firstRect(forCharacterRange: NSRange(location: index, length: 0), actualRange: nil)
+            return convert(window.convertFromScreen(screen), from: nil)
+        }
+        let color = NSColor.placeholderTextColor
+        var bodyTop: CGFloat?
+        if titleLine == "# " || titleLine.isEmpty {
+            let (o1, _, _) = EditorMetrics.headingOffsets
+            let font = MarkdownTextView.Coordinator.bold(
+                MarkdownTextView.Coordinator.baseFont(coord.fontSize + o1, coord.design))
+            let r = viewRect(at: (titleLine as NSString).length)
+            ("Untitled" as NSString).draw(in: NSRect(x: r.minX, y: r.minY, width: bounds.width - r.minX, height: r.height),
+                                          withAttributes: [.font: font, .foregroundColor: color,
+                                                           .paragraphStyle: Self.placeholderStyle(font)])
+            if !hasNewline { bodyTop = r.maxY + EditorMetrics.paragraphSpacing } // no body line yet: hint below the title
+        }
+        if bodyEmpty {
+            let font = MarkdownTextView.Coordinator.baseFont(coord.fontSize, coord.design)
+            let r: NSRect
+            if hasNewline { r = viewRect(at: titleRange.location + titleRange.length) }
+            else if let top = bodyTop {
+                r = NSRect(x: textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 0), y: top,
+                           width: bounds.width, height: font.pointSize * 2)
+            } else { return } // title present, body line not yet started: nothing to hint at
+            ("Start typing. / for commands." as NSString).draw(
+                in: NSRect(x: r.minX, y: r.minY, width: bounds.width - r.minX, height: r.height),
+                withAttributes: [.font: font, .foregroundColor: color,
+                                 .paragraphStyle: Self.placeholderStyle(font)])
+        }
+    }
+
+    /// Same vertical metrics as the real text, so the hint and the caret share a baseline.
+    private static func placeholderStyle(_ font: NSFont) -> NSParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.lineHeightMultiple = EditorMetrics.lineHeightMultiple
+        p.minimumLineHeight = (NSLayoutManager().defaultLineHeight(for: font) * EditorMetrics.lineHeightMultiple).rounded()
+        p.lineBreakMode = .byClipping
+        return p
     }
 
     /// The drag is over, so the selection is final — see `Coordinator.selectionSettled`.

@@ -7,6 +7,9 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ### Changed
 
+- **Placeholders.** An empty note shows "Untitled" in title weight where the title will
+  land and "Start typing. / for commands." where the body will; each disappears the moment
+  that part has text. Drawn over the editor, never inserted into the note.
 - **Links work.** `[text](url)` renders as a link — accent, underlined, click opens it —
   with the brackets and target receding. The selection bar's Link button fills the target
   from a URL on the clipboard, or leaves the placeholder selected so typing or ⌘V replaces it.
