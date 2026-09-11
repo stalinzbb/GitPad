@@ -1269,7 +1269,7 @@ struct ConflictView: View {
                 ChromeIcon(symbol: ChromeGlyph.back, help: "Back (Esc)") { store.goBack() }
             }
 
-            Text("Two Macs edited the same note between syncs. GitPad kept this Mac's version and saved the other alongside it — nothing was lost.")
+            Text("Two Macs edited the same note between syncs. GitPad kept this Mac's version and saved the other alongside it — nothing was lost. Highlighted lines exist only on that side.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 14).padding(.bottom, 8)
@@ -1284,9 +1284,11 @@ struct ConflictView: View {
                     .labelsHidden().padding(.horizontal, 14).padding(.bottom, 6)
                 }
                 if let orig = store.original(for: copy) {
+                    let mine = Self.lines(orig), theirs = Self.lines(copy)
+                    let only = NoteStore.uniqueLines(mine, theirs)
                     HStack(spacing: 8) {
-                        pane("On this Mac", orig)
-                        pane("From \(store.conflictDevice(copy))", copy)
+                        pane("On this Mac", mine, only.a)
+                        pane("From \(store.conflictDevice(copy))", theirs, only.b)
                     }
                     .padding(.horizontal, 14)
                     HStack(spacing: 10) {
@@ -1300,7 +1302,7 @@ struct ConflictView: View {
                     VStack(spacing: 8) {
                         Text("The note this came from no longer exists on this Mac.")
                             .font(.caption).foregroundStyle(.secondary)
-                        pane("From \(store.conflictDevice(copy))", copy)
+                        pane("From \(store.conflictDevice(copy))", Self.lines(copy), [])
                         HStack(spacing: 10) {
                             Button("Keep as Note") { resolve { store.resolveKeepBoth(copy) } }
                             Button("Discard") { resolve { store.resolveDiscard(copy) } }
@@ -1320,11 +1322,27 @@ struct ConflictView: View {
         selection = nil
     }
 
-    private func pane(_ label: String, _ url: URL) -> some View {
+    private static func lines(_ url: URL) -> [String] {
+        ((try? String(contentsOf: url, encoding: .utf8)) ?? "").components(separatedBy: "\n")
+    }
+
+    /// One Text with per-line background attributes, not a VStack of rows: selection and
+    /// copy still work across the whole pane, and there's nothing to lay out per line.
+    private static func highlighted(_ lines: [String], _ only: Set<Int>) -> AttributedString {
+        var out = AttributedString()
+        for (i, line) in lines.enumerated() {
+            var s = AttributedString(line + (i < lines.count - 1 ? "\n" : ""))
+            if only.contains(i) { s.backgroundColor = Color.statusWarn.opacity(Alpha.iconHover) }
+            out += s
+        }
+        return out
+    }
+
+    private func pane(_ label: String, _ lines: [String], _ only: Set<Int>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             ScrollView {
-                Text((try? String(contentsOf: url, encoding: .utf8)) ?? "")
+                Text(Self.highlighted(lines, only))
                     .font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
