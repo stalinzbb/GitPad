@@ -663,6 +663,29 @@ final class NoteStore: ObservableObject {
 
     /// Folded file body, mtime-validated (mirrors `titleCache`) so search
     /// doesn't re-read every file on each keystroke.
+    /// `[[Title]]` target: the note whose H1 folds to `title`, opened; or a fresh note with
+    /// that title (the wiki convention: a link to nothing is a note waiting to be written).
+    func openNote(titled title: String) {
+        let want = Self.fold(title.trimmingCharacters(in: .whitespaces))
+        guard !want.isEmpty, !locked else { return }
+        if let hit = notes.first(where: { Self.fold(self.title(for: $0)) == want }) {
+            open(hit)
+            return
+        }
+        newNote()
+        text = "# \(title.trimmingCharacters(in: .whitespaces))\n\n"
+    }
+
+    /// Notes whose body links to `url` as `[[its title]]`. Folded on both sides, so case and
+    /// accents don't matter. ponytail: linear scan over the folded content cache — the same
+    /// cost as one search keystroke; index it if libraries reach thousands of notes.
+    func backlinks(to url: URL) -> [URL] {
+        let t = Self.fold(title(for: url))
+        guard !t.isEmpty else { return [] }
+        let needle = "[[" + t + "]]"
+        return notes.filter { $0.path != url.path && content(of: $0).contains(needle) }
+    }
+
     private func content(of url: URL) -> String {
         let mt = modified(url)
         if let c = contentCache[url], c.mtime == mt { return c.text }

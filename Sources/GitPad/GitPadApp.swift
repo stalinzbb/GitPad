@@ -412,6 +412,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let t = value("text"), !t.trimmingCharacters(in: .whitespaces).isEmpty { store.text = t }
             store.screen = .capture
             showPanel()
+        case "note": // [[wiki links]] render as this URL, so a click lands here; scripts can use it too
+            if let t = value("title") { store.openNote(titled: t) }
+            store.screen = .capture
+            showPanel()
         case "daily":
             store.selectDaily()
             store.screen = .capture

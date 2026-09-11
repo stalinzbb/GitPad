@@ -284,6 +284,23 @@ if CommandLine.arguments.contains("--uitest") {
         }
     }
 
+    // [[Title]] renders as a link into the app's own scheme; "[[" opens the completion card.
+    (tv, coord) = makeEditor("see [[Trip Plan]] soon\n"); spin()
+    let wiki = tv.textStorage!.attribute(.link, at: 6, effectiveRange: nil) as? URL
+    check(wiki?.scheme == "gitpad" && wiki?.host == "note" && wiki?.query == "title=Trip%20Plan", "wiki link: \(String(describing: wiki))")
+    check(tv.textStorage!.attribute(.link, at: 4, effectiveRange: nil) == nil, "brackets must not be a link")
+    do {
+        let (tv2, coord2) = makeUndoableEditor("")
+        coord2.parent = MarkdownTextView(text: .constant(""), noteTitles: { ["Trip Plan", "Groceries", "Tripwire"] })
+        tv2.insertText("[[", replacementRange: NSRange(location: 0, length: 0)); spin() // trigger fires on this keystroke
+        tv2.insertText("Tri", replacementRange: tv2.selectedRange()); spin()
+        check(coord2.completionCount == 2, "\"[[Tri\" should offer Trip Plan and Tripwire, got \(coord2.completionCount)")
+        tv2.insertText("p P", replacementRange: tv2.selectedRange()); spin() // spaces are fine in titles
+        check(coord2.completionCount == 1, "\"[[Trip P\" should narrow to Trip Plan")
+        tv2.insertText("]", replacementRange: tv2.selectedRange()); spin()
+        check(coord2.completionCount == 0, "a typed ] closes the card")
+    }
+
     // Pasting a copied list item mid-line starts a new line; a mid-line ☐ is not a box.
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString("☐ 1. two", forType: .string)
@@ -422,6 +439,20 @@ if CommandLine.arguments.contains("--selftest") {
     store.text += "more\n"
     store.saveNow() // disk untouched since our own write → plain save, no second copy
     check(store.conflicts.count == 1, "spurious conflict copy on an ordinary save")
+
+    // Backlinks + open-by-title. Titles fold (case/accents), the note itself is excluded.
+    // written straight to disk: newNote() debounces two calls inside 0.7 s into one note
+    let a = store.dir.appendingPathComponent("alpha.md"), b = store.dir.appendingPathComponent("beta.md")
+    try! "# Alpha\nsee [[beta]] and [[Gamma]]\n".write(to: a, atomically: true, encoding: .utf8)
+    try! "# Beta\nplain\n".write(to: b, atomically: true, encoding: .utf8)
+    store.refresh()
+    check(store.backlinks(to: b).map(\.path) == [a.path], "backlink to Beta not found: \(store.backlinks(to: b))")
+    check(store.backlinks(to: a).isEmpty, "Alpha has no backlinks")
+    store.openNote(titled: "beta")
+    check(store.selected?.path == b.path, "open by title (folded) should land on Beta")
+    Thread.sleep(forTimeInterval: 0.75) // past newNote's double-press debounce
+    store.openNote(titled: "Gamma")
+    check(store.selected?.path != b.path && store.text.hasPrefix("# Gamma"), "a missing target becomes a new note titled Gamma")
 
     // FolderWatcher: a file written by something else appears without a manual refresh.
     // store.dir, not notesDir: the store realpaths GITPAD_DIR (/var → /private/var).

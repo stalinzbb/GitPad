@@ -5,6 +5,15 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Note links.** Type `[[` and pick a note — the card that serves slash commands lists your
+  titles, narrowing as you type. `[[Title]]` renders as a link; clicking it opens that note,
+  or creates it if there's none. The status line shows "N linked" on any note that others
+  link to, with a menu to jump back. Plain Markdown on disk, as always.
+- **`gitpad://note?title=…`** opens a note by title — it's what a `[[link]]` click uses, and
+  scripts can use it too.
+
 ## [0.15.0] — 2026-09-11
 
 A new icon, links that open, placeholders that say what goes where, and a day of editor

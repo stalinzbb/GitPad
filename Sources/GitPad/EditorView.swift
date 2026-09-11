@@ -509,7 +509,8 @@ struct CaptureView: View {
             MarkdownTextView(text: $store.text,
                              fontSize: CGFloat(editorFontSize),
                              design: fontDesign,
-                             theme: theme)
+                             theme: theme,
+                             noteTitles: { store.notes.map { store.title(for: $0) }.filter { !$0.isEmpty } })
             statusLine
         }
         // ⌘N/⌘L/⌘S/⌘⌫/⌘M/⌘, are handled by the main-menu "Note" submenu in AppDelegate,
@@ -614,6 +615,7 @@ struct CaptureView: View {
                         Text(pendingLabel!)
                     }
                     Spacer(minLength: Space.m)
+                    backlinksMenu
                     if Updater.isDevBuild { DevTag() }
                     Chip(text: "⌘K", font: .caption2.weight(.medium))
                 }
@@ -630,6 +632,26 @@ struct CaptureView: View {
     }
 
     private var dot: some View { Text("·").foregroundStyle(.tertiary) }
+
+    /// Notes that link here as `[[this title]]`: a small menu in the status line, present
+    /// only when there are any — the bar stays quiet for the common case.
+    @ViewBuilder private var backlinksMenu: some View {
+        if let sel = store.selected {
+            let links = store.backlinks(to: sel)
+            if !links.isEmpty {
+                Menu {
+                    ForEach(links, id: \.self) { url in
+                        Button(store.title(for: url)) { store.open(url) }
+                    }
+                } label: {
+                    Label("\(links.count) linked", systemImage: "arrow.turn.up.left")
+                        .font(.caption2).labelStyle(.titleAndIcon)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Notes that link to this one")
+            }
+        }
+    }
 
     private var needsAttention: Bool { store.syncStatus == .offline }
 
@@ -1940,6 +1962,8 @@ struct MarkdownTextView: NSViewRepresentable {
     var fontSize: CGFloat = 14
     var design: String = "system"
     var theme: Theme = Theme.named("System")
+    /// Titles for the `[[` completion card. A closure, read only when "[[" is typed.
+    var noteTitles: () -> [String] = { [] }
 
     func makeNSView(context: Context) -> NSScrollView {
         // TextKit 1 stack so our layout manager can draw full-width dividers
@@ -2018,6 +2042,8 @@ struct MarkdownTextView: NSViewRepresentable {
         var design: String = "system"
         var themeID: String = "System"
         private var slashLocation: Int?
+        /// "/" or "[[" — what opened the card, and so what its rows are.
+        private var slashTrigger = "/"
         private let actionCard = FloatingCard()
         private let slashCard = FloatingCard()
         private var slashItems: [SlashCommand] = []
@@ -2268,6 +2294,19 @@ struct MarkdownTextView: NSViewRepresentable {
                 }
                 storage.addAttributes(attrs, range: text)
             }
+            // [[Title]]: same look, and the target is the app's own URL scheme, so the click
+            // path (SmartTextView.mouseDown → NSWorkspace → AppDelegate.handleURL) needs
+            // nothing new — and Raycast can open notes by title with the same URL.
+            Self.wikiRegex.enumerateMatches(in: storage.string, range: range) { m, _, _ in
+                guard let m else { return }
+                storage.addAttributes([.foregroundColor: NSColor.tertiaryLabelColor], range: m.range)
+                let title = (storage.string as NSString).substring(with: m.range(at: 1))
+                var attrs: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: accent, .underlineStyle: NSUnderlineStyle.single.rawValue]
+                if let q = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                   let url = URL(string: "gitpad://note?title=" + q) { attrs[.link] = url }
+                storage.addAttributes(attrs, range: m.range(at: 1))
+            }
             applyListLayout(storage, in: range)
             storage.endEditing()
             if let tv = textView {
@@ -2280,6 +2319,8 @@ struct MarkdownTextView: NSViewRepresentable {
 
         /// `[text](target)` — text can't contain `]`, target can't contain `)`.
         static let linkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]*)\)"#)
+        /// `[[Title]]` — a note by its title.
+        static let wikiRegex = try! NSRegularExpression(pattern: #"\[\[([^\]\n]+)\]\]"#)
 
         // MARK: list layout — hanging indents + display markers
         private var listStyleCache: [String: NSParagraphStyle] = [:]
@@ -2524,28 +2565,41 @@ struct MarkdownTextView: NSViewRepresentable {
             let caret = tv.selectedRange().location
 
             if slashLocation == nil {
-                guard caret > 0, caret <= ns.length,
-                      ns.character(at: caret - 1) == UInt16(UnicodeScalar("/").value) else { return }
-                if caret >= 2 {
-                    let prev = ns.character(at: caret - 2)
-                    guard prev == 32 || prev == 10 || prev == 9 else { return }
-                }
-                slashLocation = caret - 1
+                guard caret > 0, caret <= ns.length else { return }
+                let c = ns.character(at: caret - 1)
+                let prev: UInt16? = caret >= 2 ? ns.character(at: caret - 2) : nil
+                if c == UInt16(UnicodeScalar("/").value), prev == nil || prev == 32 || prev == 10 || prev == 9 {
+                    slashTrigger = "/"; slashLocation = caret - 1
+                } else if c == UInt16(UnicodeScalar("[").value), prev == UInt16(UnicodeScalar("[").value) {
+                    slashTrigger = "[["; slashLocation = caret - 2 // the first "["
+                } else { return }
                 slashIndex = 0
             }
 
             guard let loc = slashLocation, caret > loc, caret <= ns.length else { return dismissSlash() }
-            let query = ns.substring(with: NSRange(location: loc + 1, length: caret - loc - 1))
-            // a space or punctuation means you were writing, not choosing
-            guard query.allSatisfy({ $0.isLetter || $0.isNumber }) else { return dismissSlash() }
-
-            let all = Self.slashCommands()
-            slashItems = query.isEmpty ? all
-                : all.filter { $0.matches(query) }
-            guard !slashItems.isEmpty else { return dismissSlash() }
+            let query = ns.substring(with: NSRange(location: loc + slashTrigger.count,
+                                                   length: caret - loc - slashTrigger.count))
+            let all: [SlashCommand]
+            if slashTrigger == "/" {
+                // a space or punctuation means you were writing, not choosing
+                guard query.allSatisfy({ $0.isLetter || $0.isNumber }) else { return dismissSlash() }
+                all = Self.slashCommands()
+            } else {
+                // titles have spaces; "]" or a newline means the link was finished by hand
+                guard !query.contains("]"), !query.contains("\n") else { return dismissSlash() }
+                all = parent.noteTitles().map { SlashCommand($0, "doc.text", "[[\($0)]] ") }
+            }
+            let hits = query.isEmpty ? all : all.filter { $0.matches(query) }
+            guard !hits.isEmpty else { return dismissSlash() }
+            slashTotal = hits.count
+            slashItems = Array(hits.prefix(8)) // the card is eight rows tall
             slashIndex = min(slashIndex, slashItems.count - 1)
             showSlash(tv, at: loc, query: query)
         }
+
+        private var slashTotal = 0
+        /// Test seam: rows the card currently offers (0 = no card).
+        var completionCount: Int { slashItems.count }
 
         private func showSlash(_ tv: NSTextView, at loc: Int, query: String) {
             guard let lm = tv.layoutManager, let tc = tv.textContainer else { return }
@@ -2554,7 +2608,7 @@ struct MarkdownTextView: NSViewRepresentable {
             var rect = lm.boundingRect(forGlyphRange: gr, in: tc)
             rect.origin.x += tv.textContainerOrigin.x
             rect.origin.y += tv.textContainerOrigin.y
-            slashCard.show(SlashMenuCard(items: slashItems, index: slashIndex, query: query,
+            slashCard.show(SlashMenuCard(items: slashItems, index: slashIndex, query: query, total: slashTotal,
                                          onPick: { [weak self] in self?.insertSnippet($0) })
                             .environment(\.theme, Theme.named(themeID)),
                            above: rect, of: tv)
@@ -2997,6 +3051,7 @@ struct SlashMenuCard: View {
     let items: [SlashCommand]
     let index: Int
     let query: String
+    var total: Int = 8
     let onPick: (SlashCommand) -> Void
 
     var body: some View {
@@ -3018,7 +3073,7 @@ struct SlashMenuCard: View {
             HStack {
                 Text("↑↓ choose · ↩ insert · esc")
                 Spacer(minLength: Space.xl)
-                Text("\(items.count) of 8")
+                Text("\(items.count) of \(max(total, items.count))")
             }
             .font(.caption2).foregroundStyle(.tertiary)
             .padding(.horizontal, Space.m).padding(.top, Space.xs)
