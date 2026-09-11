@@ -509,6 +509,29 @@ final class NoteStore: ObservableObject {
         return device.isEmpty ? "another device" : device
     }
 
+    /// Lines that exist on only one side of a conflict pair, by index. Classic LCS table.
+    /// ponytail: O(n·m) memory and time — notes are hundreds of lines, not hundreds of
+    /// thousands; switch to Myers if a diff ever takes visible time.
+    static func uniqueLines(_ a: [String], _ b: [String]) -> (a: Set<Int>, b: Set<Int>) {
+        let n = a.count, m = b.count
+        var lcs = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            for j in stride(from: m - 1, through: 0, by: -1) {
+                lcs[i][j] = a[i] == b[j] ? lcs[i + 1][j + 1] + 1 : max(lcs[i + 1][j], lcs[i][j + 1])
+            }
+        }
+        var ua = Set<Int>(), ub = Set<Int>()
+        var i = 0, j = 0
+        while i < n, j < m {
+            if a[i] == b[j] { i += 1; j += 1 }
+            else if lcs[i + 1][j] >= lcs[i][j + 1] { ua.insert(i); i += 1 }
+            else { ub.insert(j); j += 1 }
+        }
+        while i < n { ua.insert(i); i += 1 }
+        while j < m { ub.insert(j); j += 1 }
+        return (ua, ub)
+    }
+
     func original(for conflictCopy: URL) -> URL? {
         guard let base = conflictCopy.lastPathComponent.components(separatedBy: " (conflict ").first
         else { return nil }

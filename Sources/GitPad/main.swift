@@ -361,6 +361,17 @@ if CommandLine.arguments.contains("--selftest") {
     precondition(store.notes.contains(where: { $0.path == external.path }), "watcher never saw the external file")
     try? fm.removeItem(at: notesDir)
 
+    // Conflict diff: lines unique to each side, by index.
+    let d1 = NoteStore.uniqueLines(["# T", "a", "b", "c"], ["# T", "a", "x", "c"])
+    precondition(d1.a == [2] && d1.b == [2], "\(d1)")
+    let d2 = NoteStore.uniqueLines(["a", "b"], ["a", "b", "c", "d"])
+    precondition(d2.a.isEmpty && d2.b == [2, 3], "\(d2)")
+    let d3 = NoteStore.uniqueLines(["a", "b", "c"], ["c"])
+    precondition(d3.a == [0, 1] && d3.b.isEmpty, "\(d3)")
+    let d4 = NoteStore.uniqueLines([], ["only"])
+    precondition(d4.a.isEmpty && d4.b == [0], "\(d4)")
+    precondition(NoteStore.uniqueLines(["same"], ["same"]) == ([], []), "identical must mark nothing")
+
     // Commit author: Settings override beats the Mac's name, blank means the Mac's name.
     let hostName = Host.current().localizedName ?? "GitPad"
     UserDefaults.standard.set("  Studio/2:b  ", forKey: "deviceName")

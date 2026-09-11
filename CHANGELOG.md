@@ -29,6 +29,9 @@ All notable changes to GitPad. Dates are release dates; format loosely follows
   `.DS_Store` or an `.env` dropped into the folder by mistake stays local instead of being
   committed and pushed on the next tick.
 
+- **Conflicts show what differs.** The Conflicts screen highlights the lines that exist
+  on only one side, so "Keep Mine / Use Theirs" is a glance, not a read-through.
+
 ### Fixed
 
 - **A sync can no longer erase the other Mac's edit to the note you have open.** When a
